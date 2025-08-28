@@ -36,6 +36,9 @@ class TikTokBot:
         # معالج أمر البداية
         start_handler = CommandHandler('start', self.handlers.start_command)
         self.application.add_handler(start_handler)
+        # أوامر إدارية: تحديث/عرض المخطط
+        self.application.add_handler(CommandHandler('refresh_schema', self.handlers.admin_refresh_schema))
+        self.application.add_handler(CommandHandler('show_schema', self.handlers.admin_show_schema))
         
         # معالج إضافة الحساب
         add_account_handler = ConversationHandler(

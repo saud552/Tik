@@ -9,8 +9,10 @@ from core.tiktok_reporter import TikTokReporter
 from models.job import ReportType
 from telegram_bot.keyboards import TikTokKeyboards
 from config.settings import ADMIN_USER_ID, ADMIN_USER_IDS, REPORT_REASONS
+from utils.reason_mapping import ReasonMapping
+from pathlib import Path
 from core.web_login_automator import TikTokWebLoginAutomator
-from core.report_schema_fetcher import fetch_report_schema
+from core.report_schema_fetcher import fetch_report_schema, refresh_report_schema
 
 # حالات المحادثة
 (
@@ -30,6 +32,8 @@ class TikTokHandlers:
         self.scheduler = ReportScheduler(self.account_manager)
         self.reporter = TikTokReporter()
         self.user_states = {}  # لتخزين حالة المستخدم
+        # مُحمّل خريطة الأسباب الديناميكية
+        self.reason_mapping = ReasonMapping(Path("config/reason_mapping.json"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر البداية"""
@@ -40,6 +44,15 @@ class TikTokHandlers:
             await update.message.reply_text("❌ عذراً، هذا البوت متاح للمدير فقط.")
             return
         
+        # دعم أوامر إدارية سريعة مع start: /start refresh_schema أو /start show_schema
+        txt = update.message.text or ""
+        if "refresh_schema" in txt:
+            await self.admin_refresh_schema(update, context)
+            return
+        if "show_schema" in txt:
+            await self.admin_show_schema(update, context)
+            return
+
         await update.message.reply_text(
             "🎉 مرحباً بك في بوت بلاغات TikTok!\n\n"
             "اختر الخيار المطلوب من القائمة أدناه:",
@@ -103,6 +116,45 @@ class TikTokHandlers:
         )
         
         return WAITING_FOR_TARGET
+
+    async def admin_refresh_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """تحديث قسري لمخطط الفئات وتفريغ الكاش"""
+        user = update.effective_user
+        if not user or (user.id not in set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))):
+            return
+        await update.message.reply_text("🔄 جاري تحديث مخطط البلاغات...")
+        try:
+            v = await refresh_report_schema('video')
+            a = await refresh_report_schema('account')
+            await update.message.reply_text(
+                "✅ تم التحديث.\n"
+                f"video: source={v.source}, cats={len(v.categories)}\n"
+                f"account: source={a.source}, cats={len(a.categories)}"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ فشل التحديث: {e}")
+
+    async def admin_show_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """عرض موجز عن المخطط الحالي من الكاش"""
+        user = update.effective_user
+        if not user or (user.id not in set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))):
+            return
+        try:
+            v = await fetch_report_schema('video')
+            a = await fetch_report_schema('account')
+            def summarize(schema):
+                parts = []
+                for c in (schema.categories or [])[:5]:
+                    items = c.get('items', [])
+                    parts.append(f"- {c.get('title')}: {min(len(items), 5)} عناصر")
+                return "\n".join(parts)
+            await update.message.reply_text(
+                "📋 المخطط الحالي:\n"
+                f"video (source={v.source}, cats={len(v.categories)}):\n{summarize(v)}\n\n"
+                f"account (source={a.source}, cats={len(a.categories)}):\n{summarize(a)}"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ فشل العرض: {e}")
     
     async def handle_target_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة إدخال الهدف"""
@@ -160,7 +212,7 @@ class TikTokHandlers:
             return ConversationHandler.END
         
         if query.data.startswith("dynitem_"):
-            # اختيار سبب ديناميكي بالنص
+            # اختيار سبب ديناميكي بالنص ومحاولة تحويله إلى سبب رقمي عبر mapping الخارجي
             rid = query.data.split("_", 1)[1]
             user_id = query.from_user.id
             schema = self.user_states[user_id].get('report_schema')
@@ -174,12 +226,31 @@ class TikTokHandlers:
             except Exception:
                 pass
             self.user_states[user_id]['selected_reason_text'] = reason_text
-            await query.edit_message_text(
-                f"✅ تم اختيار نوع البلاغ: {reason_text}\n\n"
-                "أدخل عدد البلاغات المراد تنفيذها من كل حساب (رقم صحيح):",
-                reply_markup=TikTokKeyboards.get_cancel_keyboard()
-            )
-            return WAITING_FOR_REPORTS_COUNT
+
+            # تحديد النطاق (video/account) بناءً على نوع البلاغ الحالي
+            scope = 'video' if self.user_states[user_id]['report_type'] == ReportType.VIDEO else 'account'
+            mapped = None
+            try:
+                mapped = self.reason_mapping.resolve(scope, rid)
+            except Exception:
+                mapped = None
+            if isinstance(mapped, int):
+                # تم إيجاد رقم سبب صالح
+                self.user_states[user_id]['reason'] = mapped
+                await query.edit_message_text(
+                    f"✅ تم اختيار نوع البلاغ: {reason_text} (code: {mapped})\n\n"
+                    "أدخل عدد البلاغات المراد تنفيذها من كل حساب (رقم صحيح):",
+                    reply_markup=TikTokKeyboards.get_cancel_keyboard()
+                )
+                return WAITING_FOR_REPORTS_COUNT
+            else:
+                # لم يتم إيجاد تعيين رقمي؛ إرشاد المستخدم للعودة للفئات الثابتة أو اختيار من القائمة العامة
+                await query.edit_message_text(
+                    "⚠️ لا يوجد تعيين رقمي معتمد لهذا السبب الديناميكي.\n"
+                    "يرجى اختيار السبب من الفئات الثابتة أو الضغط على 'عرض جميع الأسباب'.",
+                    reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[user_id]['report_type'].value)
+                )
+                return WAITING_FOR_REASON
 
         if query.data.startswith("dyncat_"):
             # عرض عناصر الفئة المختارة
