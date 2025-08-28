@@ -238,6 +238,38 @@ class TikTokHandlers:
             state = self.user_states[user_id]
             
             try:
+                # تحقق صارم من اكتمال الحالة قبل إنشاء المهمة
+                target = state.get('target')
+                reason = state.get('reason')
+                rpa = state.get('reports_per_account')
+                healthy_count = len(self.account_manager.get_healthy_accounts())
+                print(f"[Confirm] user={user_id} target={target} reason={reason} rpa={rpa} healthy_accounts={healthy_count}")
+
+                if not target:
+                    await query.edit_message_text(
+                        "❌ لا يوجد هدف محدد. يرجى إدخال الرابط/اسم المستخدم أولاً.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+                    return ConversationHandler.END
+                if not isinstance(reason, int):
+                    await query.edit_message_text(
+                        "❌ لم يتم اختيار نوع البلاغ. يرجى اختيار السبب قبل التأكيد.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+                    return ConversationHandler.END
+                if not isinstance(rpa, int) or rpa <= 0:
+                    await query.edit_message_text(
+                        "❌ لم يتم تحديد عدد البلاغات لكل حساب. يرجى اختياره قبل التأكيد.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+                    return ConversationHandler.END
+                if healthy_count == 0:
+                    await query.edit_message_text(
+                        "❌ لا توجد حسابات سليمة متاحة للتنفيذ. يرجى إضافة حسابات أو فحصها.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+                    return ConversationHandler.END
+
                 # إنشاء مهمة البلاغ
                 job_id = await self.scheduler.queue_job(
                     report_type=state['report_type'],
