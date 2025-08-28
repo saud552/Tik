@@ -159,9 +159,33 @@ class TikTokBot:
                 f"✅ تم إضافة الحساب بنجاح!\n\n"
                 f"👤 اسم المستخدم: {username}\n"
                 f"🆔 معرف الحساب: {account_id[:8]}...\n\n"
-                f"يمكنك الآن استخدام هذا الحساب في عمليات البلاغ.",
-                reply_markup=TikTokKeyboards.get_main_menu()
+                f"⏳ جاري محاولة تسجيل الدخول عبر الويب لاستخراج الكوكيز...",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
             )
+
+            # محاولة استخراج كوكيز الويب تلقائياً
+            try:
+                from core.tiktok_reporter import TikTokReporter
+                from models.account import TikTokAccount
+                account = self.handlers.account_manager.get_account(account_id)
+                reporter = TikTokReporter(self.handlers.account_manager)
+                password_plain = self.handlers.account_manager.get_decrypted_password(account_id)
+                ok = await reporter.web_login_and_store_cookies(account, password_plain)
+                if ok:
+                    await update.message.reply_text(
+                        "✅ تم استخراج كوكيز جلسة الويب بنجاح!\nيمكنك الآن تنفيذ بلاغات الويب عند الحاجة.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+                else:
+                    await update.message.reply_text(
+                        "⚠️ تعذر استخراج كوكيز الويب تلقائياً.\nسيتم استخدام مسار الموبايل افتراضياً. يمكنك لاحقاً استيراد الكوكيز يدوياً.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"⚠️ تعذر إتمام تسجيل دخول الويب تلقائياً: {e}\nسيتم استخدام مسار الموبايل افتراضياً.",
+                    reply_markup=TikTokKeyboards.get_main_menu()
+                )
             
             # تنظيف حالة المستخدم
             del self.handlers.user_states[user_id]

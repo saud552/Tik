@@ -23,6 +23,7 @@ from config.settings import (
     HTTP_PROXIES,
 )
 from models.account import TikTokAccount
+from core.web_login_automator import TikTokWebLoginAutomator
 
 class TikTokReporter:
     def __init__(self, account_manager=None):
@@ -78,6 +79,27 @@ class TikTokReporter:
                     proxies["https"] = p
             if proxies:
                 self.session.proxies.update(proxies)
+
+    async def web_login_and_store_cookies(self, account: TikTokAccount, password: str) -> bool:
+        """تسجيل دخول ويب عبر Playwright وتخزين الكوكيز في الحساب"""
+        try:
+            proxy = account.proxy
+            automator = TikTokWebLoginAutomator(headless=True)
+            cookies_dict = await automator.login_and_get_cookies(account.username, password, proxy=proxy)
+            # تحقق من وجود كوكيز أساسية
+            if not cookies_dict:
+                return False
+            # حفظ الكوكيز كسلسلة
+            cookies_str = '; '.join([f"{k}={v}" for k, v in cookies_dict.items()])
+            if self.account_manager:
+                self.account_manager.update_account_cookies(account.id, cookies_str)
+            # تحديث جلسة requests بهذه الكوكيز أيضاً
+            for k, v in cookies_dict.items():
+                self.session.cookies.set(k, v)
+            return True
+        except Exception as e:
+            print(f"❌ فشل تسجيل دخول الويب عبر Playwright: {e}")
+            return False
     
     def _simulate_human_delay(self, min_delay: Optional[float] = None, max_delay: Optional[float] = None):
         """محاكاة تأخير بشري محسن"""
@@ -145,6 +167,11 @@ class TikTokReporter:
             # محاولة 1: تسجيل الدخول عبر الويب (الأكثر موثوقية)
             if await self._web_login(account.id, account.username, password):
                 print(f"✅ تم تسجيل الدخول بنجاح عبر الويب للحساب {account.username}")
+                return True
+
+            # محاولة 1-b: تسجيل الدخول عبر Playwright لاستخراج كوكيز جلسة ويب
+            if await self.web_login_and_store_cookies(account, password):
+                print(f"✅ تم استخراج كوكيز الويب عبر Playwright للحساب {account.username}")
                 return True
             
             # محاولة 2: تسجيل الدخول عبر Mobile API
