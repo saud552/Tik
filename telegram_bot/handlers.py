@@ -10,6 +10,7 @@ from models.job import ReportType
 from telegram_bot.keyboards import TikTokKeyboards
 from config.settings import ADMIN_USER_ID, ADMIN_USER_IDS, REPORT_REASONS
 from core.web_login_automator import TikTokWebLoginAutomator
+from core.report_schema_fetcher import fetch_report_schema
 
 # حالات المحادثة
 (
@@ -89,7 +90,9 @@ class TikTokHandlers:
             'report_type': report_type,
             'target': None,
             'reason': None,
-            'reports_per_account': None
+            'reports_per_account': None,
+            'report_schema': None,
+            'selected_reason_text': None,
         }
         
         report_type_text = "فيديو" if report_type == ReportType.VIDEO else "حساب"
@@ -124,11 +127,23 @@ class TikTokHandlers:
             )
             return WAITING_FOR_TARGET
         
-        await update.message.reply_text(
-            "✅ تم تحديد الهدف بنجاح!\n\n"
-            "الآن اختر نوع البلاغ:",
-            reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[user_id]['report_type'].value)
-        )
+        # محاولة جلب فئات ديناميكية من الويب (best-effort)
+        try:
+            target_url = target if target_type == 'video' else (f"https://www.tiktok.com/@{user_id_info}" if user_id_info else None)
+            schema = await fetch_report_schema('video' if target_type == 'video' else 'account', target_url)
+            self.user_states[user_id]['report_schema'] = schema
+            await update.message.reply_text(
+                "✅ تم تحديد الهدف بنجاح!\n\n"
+                "الآن اختر نوع البلاغ:",
+                reply_markup=TikTokKeyboards.get_dynamic_categories_menu(schema.categories)
+            )
+        except Exception:
+            # fallback القديمة
+            await update.message.reply_text(
+                "✅ تم تحديد الهدف بنجاح!\n\n"
+                "الآن اختر نوع البلاغ:",
+                reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[user_id]['report_type'].value)
+            )
         
         return WAITING_FOR_REASON
     
@@ -144,6 +159,39 @@ class TikTokHandlers:
             await query.edit_message_text("❌ جلسة منتهية. يرجى البدء من جديد.")
             return ConversationHandler.END
         
+        if query.data.startswith("dynitem_"):
+            # اختيار سبب ديناميكي بالنص
+            rid = query.data.split("_", 1)[1]
+            user_id = query.from_user.id
+            schema = self.user_states[user_id].get('report_schema')
+            reason_text = rid
+            try:
+                for cat in (schema.categories if schema else []):
+                    for it in cat.get('items', []):
+                        if str(it.get('id')) == rid:
+                            reason_text = it.get('title') or rid
+                            break
+            except Exception:
+                pass
+            self.user_states[user_id]['selected_reason_text'] = reason_text
+            await query.edit_message_text(
+                f"✅ تم اختيار نوع البلاغ: {reason_text}\n\n"
+                "أدخل عدد البلاغات المراد تنفيذها من كل حساب (رقم صحيح):",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
+            )
+            return WAITING_FOR_REPORTS_COUNT
+
+        if query.data.startswith("dyncat_"):
+            # عرض عناصر الفئة المختارة
+            category_key = query.data.split("_", 1)[1]
+            user_id = query.from_user.id
+            schema = self.user_states[user_id].get('report_schema')
+            await query.edit_message_text(
+                f"📂 اختر نوع البلاغ:",
+                reply_markup=TikTokKeyboards.get_dynamic_items_menu(schema.categories if schema else [], category_key)
+            )
+            return WAITING_FOR_REASON
+
         if query.data.startswith("reason_"):
             # اختيار نوع بلاغ محدد
             reason_id = int(query.data.split("_")[1])
@@ -182,12 +230,19 @@ class TikTokHandlers:
             
         elif query.data == "back_to_categories":
             # العودة إلى قائمة الفئات
-            report_type = self.user_states[user_id]['report_type']
-            
-            await query.edit_message_text(
-                "📂 اختر فئة البلاغ:",
-                reply_markup=TikTokKeyboards.get_report_reasons_menu(report_type.value)
-            )
+            user_id = query.from_user.id
+            schema = self.user_states[user_id].get('report_schema')
+            if schema:
+                await query.edit_message_text(
+                    "📂 اختر فئة البلاغ:",
+                    reply_markup=TikTokKeyboards.get_dynamic_categories_menu(schema.categories)
+                )
+            else:
+                report_type = self.user_states[user_id]['report_type']
+                await query.edit_message_text(
+                    "📂 اختر فئة البلاغ:",
+                    reply_markup=TikTokKeyboards.get_report_reasons_menu(report_type.value)
+                )
             
             return WAITING_FOR_REASON
             
