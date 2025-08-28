@@ -1,7 +1,5 @@
-import asyncio
-from telegram import Update, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram.constants import ParseMode
 from core.account_manager import TikTokAccountManager
 from core.report_scheduler import ReportScheduler
 from core.tiktok_reporter import TikTokReporter
@@ -28,6 +26,8 @@ class TikTokHandlers:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر البداية"""
+        if not update or not update.effective_user or not update.message:
+            return
         if update.effective_user.id != ADMIN_USER_ID:
             await update.message.reply_text("❌ عذراً، هذا البوت متاح للمدير فقط.")
             return
@@ -41,6 +41,8 @@ class TikTokHandlers:
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة القائمة الرئيسية"""
         query = update.callback_query
+        if not query:
+            return
         await query.answer()
         
         if query.data == "manage_accounts":
@@ -81,6 +83,8 @@ class TikTokHandlers:
     
     async def handle_target_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة إدخال الهدف"""
+        if not update or not update.message or not update.message.from_user:
+            return ConversationHandler.END
         user_id = update.message.from_user.id
         if user_id not in self.user_states:
             await update.message.reply_text("❌ جلسة منتهية. يرجى البدء من جديد.")
@@ -111,6 +115,8 @@ class TikTokHandlers:
     async def handle_reason_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة اختيار نوع البلاغ"""
         query = update.callback_query
+        if not query:
+            return ConversationHandler.END
         await query.answer()
         
         if query.data.startswith("reason_"):
@@ -139,6 +145,8 @@ class TikTokHandlers:
     async def handle_reports_count_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة اختيار عدد البلاغات"""
         query = update.callback_query
+        if not query:
+            return ConversationHandler.END
         await query.answer()
         
         if query.data.startswith("reports_"):
@@ -181,6 +189,8 @@ class TikTokHandlers:
     async def handle_confirmation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة تأكيد المهمة"""
         query = update.callback_query
+        if not query:
+            return ConversationHandler.END
         await query.answer()
         
         if query.data == "confirm_report":
@@ -296,6 +306,8 @@ class TikTokHandlers:
     
     async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر الإلغاء"""
+        if not update or not update.effective_user or not update.message:
+            return ConversationHandler.END
         user_id = update.effective_user.id
         if user_id in self.user_states:
             del self.user_states[user_id]

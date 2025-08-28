@@ -11,11 +11,10 @@ def test_telegram_bot():
     
     try:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        from telegram.ext import Application, CommandHandler
         
         # اختبار إنشاء أزرار
         button = InlineKeyboardButton("اختبار", callback_data="test")
-        keyboard = InlineKeyboardMarkup([[button]])
+        _ = InlineKeyboardMarkup([[button]])
         
         print("✅ تم استيراد python-telegram-bot بنجاح")
         print("✅ تم إنشاء أزرار تفاعلية بنجاح")
@@ -57,7 +56,7 @@ def test_dotenv():
         
         # اختبار تحميل متغيرات البيئة
         load_dotenv()
-        test_var = os.getenv('TEST_VAR', 'default_value')
+        _ = os.getenv('TEST_VAR', 'default_value')
         
         print("✅ تم استيراد python-dotenv بنجاح")
         print("✅ تم تحميل متغيرات البيئة بنجاح")
@@ -104,14 +103,14 @@ def test_tiktok_components():
         from models.account import TikTokAccount
         from models.job import ReportJob, ReportType
         
-        account = TikTokAccount(
+        _account = TikTokAccount(
             id="test_id",
             username="test_user",
             encrypted_password="encrypted_pass",
             encrypted_cookies="encrypted_cookies"
         )
         
-        job = ReportJob(
+        _job = ReportJob(
             report_type=ReportType.VIDEO,
             target="https://tiktok.com/@test/video/123",
             reason=1,
