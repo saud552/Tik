@@ -716,12 +716,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][video][mobile] status={response.status_code} video_id={video_id} owner_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0:
+                        print(f"[REPORT_SUCCESS][video][mobile] video_id={video_id} owner_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
@@ -764,12 +770,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][video][web] status={response.status_code} video_id={video_id} owner_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0 or result.get('success') is True:
+                        print(f"[REPORT_SUCCESS][video][web] video_id={video_id} owner_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
@@ -884,12 +896,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][account][mobile] status={response.status_code} user_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0:
+                        print(f"[REPORT_SUCCESS][account][mobile] user_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
@@ -931,12 +949,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][account][web] status={response.status_code} user_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0 or result.get('success') is True:
+                        print(f"[REPORT_SUCCESS][account][web] user_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
