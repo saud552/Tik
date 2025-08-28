@@ -13,6 +13,7 @@ class ReportScheduler:
         self.reporter = TikTokReporter(account_manager)
         self.active_jobs: Dict[str, ReportJob] = {}
         self.job_queue: List[ReportJob] = []
+        self.completed_jobs: List[ReportJob] = []
         self.is_running = False
         self.stop_event = asyncio.Event()
     
@@ -40,6 +41,7 @@ class ReportScheduler:
         if socks5_proxies:
             job.progress['proxies'] = socks5_proxies
         self.job_queue.append(job)
+        print(f"[Scheduler] Queued job {job.id} type={report_type.value} target={target} reason={reason} total={total_reports}")
         
         # بدء المعالجة إذا لم تكن تعمل
         if not self.is_running:
@@ -62,6 +64,7 @@ class ReportScheduler:
         try:
             # بدء المهمة
             job.start()
+            print(f"[Scheduler] Started job {job.id}")
             self.active_jobs[job.id] = job
             
             # الحصول على الحسابات السليمة
@@ -76,15 +79,25 @@ class ReportScheduler:
             # إكمال المهمة
             if job.successful_reports > 0:
                 job.complete()
+                print(f"[Scheduler] Completed job {job.id} success={job.successful_reports} failed={job.failed_reports}")
             else:
                 job.fail("لم يتم إرسال أي بلاغ بنجاح")
+                print(f"[Scheduler] Failed job {job.id} success={job.successful_reports} failed={job.failed_reports}")
                 
         except Exception as e:
             job.fail(f"خطأ في تنفيذ المهمة: {e}")
+            print(f"[Scheduler] Error in job {job.id}: {e}")
         finally:
             # إزالة المهمة من المهام النشطة
             if job.id in self.active_jobs:
                 del self.active_jobs[job.id]
+            # حفظ المهمة في السجل المكتمل (بحد أقصى 10)
+            try:
+                self.completed_jobs.append(job)
+                if len(self.completed_jobs) > 10:
+                    self.completed_jobs = self.completed_jobs[-10:]
+            except Exception:
+                pass
     
     async def distribute_reports(self, job: ReportJob, accounts: List[TikTokAccount]):
         """توزيع البلاغات على الحسابات"""
@@ -102,6 +115,12 @@ class ReportScheduler:
                 if proxy_index >= len(proxies_list):
                     proxy_index = 0
                 socks = proxies_list[proxy_index]
+                # دعم user:pass@host:port وفرض socks5h://
+                if socks.startswith('socks5://'):
+                    socks = socks.replace('socks5://', 'socks5h://', 1)
+                elif not socks.startswith('socks5h://') and not socks.startswith('http://') and not socks.startswith('https://'):
+                    # ip:port أو user:pass@host:port
+                    socks = f"socks5h://{socks}"
                 proxy_index += 1
                 self.reporter.session.proxies.update({'http': socks, 'https': socks})
             else:
@@ -123,6 +142,7 @@ class ReportScheduler:
                 if job.report_type == ReportType.VIDEO:
                     # استخراج معلومات الفيديو
                     video_info = await self.reporter.extract_video_info(job.target)
+                    # إلزامية تحقق وجود الفيديو ومعرف المالك
                     if not video_info or not video_info[0] or not video_info[1]:
                         job.update_progress(account.id, "failed", "فشل في استخراج معلومات الفيديو")
                         continue
@@ -130,9 +150,8 @@ class ReportScheduler:
                     video_id, owner_user_id = video_info
                     success = await self.reporter.report_video(account, video_id, owner_user_id, job.reason)
                 elif job.report_type == ReportType.ACCOUNT:
-                    success = await self.reporter.report_account(
-                        account, job.target, job.reason
-                    )
+                    # داخل report_account سيتم التحقق من وجود المستخدم واستخراج user_id بشكل إلزامي
+                    success = await self.reporter.report_account(account, job.target, job.reason)
                 
                 if success:
                     job.successful_reports += 1
@@ -199,6 +218,12 @@ class ReportScheduler:
         all_jobs.extend(self.job_queue)
         
         return all_jobs
+
+    def get_recent_jobs(self, limit: int = 5) -> List[ReportJob]:
+        """الحصول على آخر المهام المكتملة/الفاشلة"""
+        if not self.completed_jobs:
+            return []
+        return list(reversed(self.completed_jobs[-limit:]))
     
     def get_job_stats(self) -> Dict[str, Any]:
         """الحصول على إحصائيات المهام"""

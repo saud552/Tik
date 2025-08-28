@@ -9,6 +9,9 @@ TIKTOK_MOBILE_API = "https://api-h2.tiktokv.com"
 TIKTOK_WEB_API = "https://www.tiktok.com/api"
 TIKTOK_PASSPORT_API = "https://www.tiktok.com/passport"
 
+# توافق مع الاختبارات: قاعدة API عامة
+TIKTOK_API_BASE = TIKTOK_MOBILE_API
+
 # إعدادات API محدثة وموثقة
 TIKTOK_API_ENDPOINTS = {
     'login': 'https://www.tiktok.com/passport/web/login/',
@@ -146,4 +149,14 @@ ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', 'your-secret-key-32-chars-long')
 
 # إعدادات بوت تيليجرام
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', 0))
+ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', 0))  # توافق خلفي
+
+# دعم عدة معرفات مدير عبر قائمة مفصولة بفواصل
+_ADMIN_IDS_STR = os.getenv('ADMIN_USER_IDS', '')
+if _ADMIN_IDS_STR:
+    try:
+        ADMIN_USER_IDS = [int(x.strip()) for x in _ADMIN_IDS_STR.split(',') if x.strip().isdigit()]
+    except Exception:
+        ADMIN_USER_IDS = [i for i in [ADMIN_USER_ID] if i]
+else:
+    ADMIN_USER_IDS = [i for i in [ADMIN_USER_ID] if i]

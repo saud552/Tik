@@ -23,6 +23,8 @@ from config.settings import (
     HTTP_PROXIES,
 )
 from models.account import TikTokAccount
+from core.web_login_automator import TikTokWebLoginAutomator
+from utils.metrics_logger import incr
 
 class TikTokReporter:
     def __init__(self, account_manager=None):
@@ -78,6 +80,32 @@ class TikTokReporter:
                     proxies["https"] = p
             if proxies:
                 self.session.proxies.update(proxies)
+
+    async def web_login_and_store_cookies(self, account: TikTokAccount, password: str) -> bool:
+        """تسجيل دخول ويب عبر Playwright وتخزين الكوكيز في الحساب"""
+        try:
+            proxy = account.proxy
+            # المحاولة 1: وضع headless
+            automator = TikTokWebLoginAutomator(headless=True)
+            cookies_dict = await automator.login_and_get_cookies(account.username, password, proxy=proxy)
+            # المحاولة 2: وضع non-headless إذا لم تُلتقط كوكيز
+            if not cookies_dict:
+                automator2 = TikTokWebLoginAutomator(headless=False)
+                cookies_dict = await automator2.login_and_get_cookies(account.username, password, proxy=proxy)
+            # تحقق من وجود كوكيز أساسية
+            if not cookies_dict:
+                return False
+            # حفظ الكوكيز كسلسلة
+            cookies_str = '; '.join([f"{k}={v}" for k, v in cookies_dict.items()])
+            if self.account_manager:
+                self.account_manager.update_account_cookies(account.id, cookies_str)
+            # تحديث جلسة requests بهذه الكوكيز أيضاً
+            for k, v in cookies_dict.items():
+                self.session.cookies.set(k, v)
+            return True
+        except Exception as e:
+            print(f"❌ فشل تسجيل دخول الويب عبر Playwright: {e}")
+            return False
     
     def _simulate_human_delay(self, min_delay: Optional[float] = None, max_delay: Optional[float] = None):
         """محاكاة تأخير بشري محسن"""
@@ -143,12 +171,17 @@ class TikTokReporter:
                 return False
             
             # محاولة 1: تسجيل الدخول عبر الويب (الأكثر موثوقية)
-            if await self._web_login(account.username, password):
+            if await self._web_login(account.id, account.username, password):
                 print(f"✅ تم تسجيل الدخول بنجاح عبر الويب للحساب {account.username}")
+                return True
+
+            # محاولة 1-b: تسجيل الدخول عبر Playwright لاستخراج كوكيز جلسة ويب
+            if await self.web_login_and_store_cookies(account, password):
+                print(f"✅ تم استخراج كوكيز الويب عبر Playwright للحساب {account.username}")
                 return True
             
             # محاولة 2: تسجيل الدخول عبر Mobile API
-            if await self._mobile_login(account.username, password):
+            if await self._mobile_login(account.id, account.username, password):
                 print(f"✅ تم تسجيل الدخول بنجاح عبر Mobile API للحساب {account.username}")
                 return True
             
@@ -159,7 +192,7 @@ class TikTokReporter:
             print(f"❌ خطأ في تسجيل دخول الحساب {account.username}: {e}")
             return False
     
-    async def _web_login(self, username: str, password: str) -> bool:
+    async def _web_login(self, account_id: str, username: str, password: str) -> bool:
         """تسجيل الدخول عبر TikTok Web API"""
         try:
             # أولاً: الحصول على صفحة تسجيل الدخول للحصول على CSRF token
@@ -209,7 +242,7 @@ class TikTokReporter:
                     # حفظ الكوكيز
                     cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
                     if self.account_manager:
-                        self.account_manager.update_account_cookies(account.id, cookies)
+                        self.account_manager.update_account_cookies(account_id, cookies)
                     return True
             
             print(f"❌ فشل في تسجيل الدخول عبر الويب: {login_response.status_code}")
@@ -219,7 +252,7 @@ class TikTokReporter:
             print(f"❌ خطأ في تسجيل الدخول عبر الويب: {e}")
             return False
     
-    async def _mobile_login(self, username: str, password: str) -> bool:
+    async def _mobile_login(self, account_id: str, username: str, password: str) -> bool:
         """تسجيل الدخول عبر TikTok Mobile API"""
         try:
             # معلومات الجهاز
@@ -267,7 +300,7 @@ class TikTokReporter:
                         # حفظ الكوكيز
                         cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
                         if self.account_manager:
-                            self.account_manager.update_account_cookies(account.id, cookies)
+                            self.account_manager.update_account_cookies(account_id, cookies)
                         return True
                 except json.JSONDecodeError:
                     pass
@@ -339,6 +372,22 @@ class TikTokReporter:
         except Exception as e:
             print(f"❌ خطأ في استخراج معرف الفيديو: {e}")
             return None
+
+    def _resolve_short_url(self, url: str) -> str:
+        """تتبع روابط TikTok المختصرة (vt/vm) إلى الرابط النهائي إن أمكن"""
+        try:
+            resp = self.session.get(url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=True)
+            # استخدم URL النهائي إن توفر
+            final_url = getattr(resp, 'url', None)
+            if isinstance(final_url, str) and final_url:
+                return final_url
+            # fallback إلى ترويسة Location
+            loc = resp.headers.get('Location')
+            if loc:
+                return loc
+        except Exception:
+            pass
+        return url
     
     def _extract_username_advanced(self, url: str) -> Optional[str]:
         """استخراج اسم المستخدم بطريقة متقدمة"""
@@ -599,6 +648,10 @@ class TikTokReporter:
                 success = await self._report_video_mobile(video_id, user_id, reason, device_info)
                 if success:
                     print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Mobile API")
+                    try:
+                        incr("video_success", 1)
+                    except Exception:
+                        pass
                     account.mark_success()
                     return True
             except Exception as e:
@@ -610,6 +663,10 @@ class TikTokReporter:
                     success = await self._report_video_web(video_id, user_id, reason)
                     if success:
                         print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Web API")
+                        try:
+                            incr("video_success", 1)
+                        except Exception:
+                            pass
                         account.mark_success()
                         return True
                 except Exception as e:
@@ -617,6 +674,10 @@ class TikTokReporter:
             
             if not success:
                 error_msg = "فشل في جميع محاولات الإبلاغ"
+                try:
+                    incr("video_fail", 1)
+                except Exception:
+                    pass
                 account.mark_failure(error_msg)
                 print(f"❌ {error_msg}")
                 return False
@@ -673,12 +734,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][video][mobile] status={response.status_code} video_id={video_id} owner_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0:
+                        print(f"[REPORT_SUCCESS][video][mobile] video_id={video_id} owner_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
@@ -697,6 +764,11 @@ class TikTokReporter:
     async def _report_video_web(self, video_id: str, user_id: str, reason: int) -> bool:
         """الإبلاغ عن الفيديو عبر Web API"""
         try:
+            # التأكد من وجود كوكيز جلسة لازمة قبل محاولة الإبلاغ عبر الويب
+            required_cookies = ['ttwid', 'tt_csrf_token']
+            if not any(cookie in self.session.cookies for cookie in required_cookies):
+                print("❌ لا توجد كوكيز جلسة صالحة للإبلاغ عبر الويب")
+                return False
             # بناء بيانات البلاغ
             report_data = {
                 'aweme_id': video_id,
@@ -716,21 +788,24 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][video][web] status={response.status_code} video_id={video_id} owner_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
-                    if result.get('status_code') == 0 or result.get('success'):
+                    if result.get('status_code') == 0 or result.get('success') is True:
+                        print(f"[REPORT_SUCCESS][video][web] video_id={video_id} owner_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
                         return False
                 except json.JSONDecodeError:
-                    # إذا لم تكن الاستجابة JSON، نتحقق من النص
-                    if 'success' in response.text.lower() or 'reported' in response.text.lower():
-                        return True
-                    print("❌ استجابة غير صحيحة من Web API")
+                    print("❌ استجابة غير صحيحة من Web API (ليست JSON صحيحة)")
                     return False
             
             print(f"❌ فشل في البلاغ: {response.status_code}")
@@ -766,6 +841,10 @@ class TikTokReporter:
                 success = await self._report_account_mobile(target_user_id, reason, device_info)
                 if success:
                     print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Mobile API")
+                    try:
+                        incr("account_success", 1)
+                    except Exception:
+                        pass
                     account.mark_success()
                     return True
             except Exception as e:
@@ -777,6 +856,10 @@ class TikTokReporter:
                     success = await self._report_account_web(target_user_id, reason)
                     if success:
                         print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Web API")
+                        try:
+                            incr("account_success", 1)
+                        except Exception:
+                            pass
                         account.mark_success()
                         return True
                 except Exception as e:
@@ -784,6 +867,10 @@ class TikTokReporter:
             
             if not success:
                 error_msg = "فشل في جميع محاولات الإبلاغ"
+                try:
+                    incr("account_fail", 1)
+                except Exception:
+                    pass
                 account.mark_failure(error_msg)
                 print(f"❌ {error_msg}")
                 return False
@@ -839,12 +926,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][account][mobile] status={response.status_code} user_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0:
+                        print(f"[REPORT_SUCCESS][account][mobile] user_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
@@ -863,6 +956,11 @@ class TikTokReporter:
     async def _report_account_web(self, user_id: str, reason: int) -> bool:
         """الإبلاغ عن الحساب عبر Web API"""
         try:
+            # التأكد من وجود كوكيز جلسة لازمة قبل محاولة الإبلاغ عبر الويب
+            required_cookies = ['ttwid', 'tt_csrf_token']
+            if not any(cookie in self.session.cookies for cookie in required_cookies):
+                print("❌ لا توجد كوكيز جلسة صالحة للإبلاغ عبر الويب")
+                return False
             # بناء بيانات البلاغ
             report_data = {
                 'user_id': user_id,
@@ -881,21 +979,24 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][account][web] status={response.status_code} user_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
-                    if result.get('status_code') == 0 or result.get('success'):
+                    if result.get('status_code') == 0 or result.get('success') is True:
+                        print(f"[REPORT_SUCCESS][account][web] user_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
                         return False
                 except json.JSONDecodeError:
-                    # إذا لم تكن الاستجابة JSON، نتحقق من النص
-                    if 'success' in response.text.lower() or 'reported' in response.text.lower():
-                        return True
-                    print("❌ استجابة غير صحيحة من Web API")
+                    print("❌ استجابة غير صحيحة من Web API (ليست JSON صحيحة)")
                     return False
             
             print(f"❌ فشل في البلاغ: {response.status_code}")
@@ -941,6 +1042,21 @@ class TikTokReporter:
                 # محاولة استخراج كاسم مستخدم
                 if self._is_valid_username(target):
                     return 'account', target, None
+
+            # دعم روابط مختصرة من vt.tiktok.com أو vm.tiktok.com
+            try:
+                parsed = urlparse(normalized_target)
+                short_domains = {'vt.tiktok.com', 'vm.tiktok.com'}
+                if parsed.netloc.lower() in short_domains:
+                    resolved = self._resolve_short_url(normalized_target)
+                    # حاول مجددًا استخراج الفيديو بعد التحويل
+                    if '/video/' in resolved or '/v/' in resolved:
+                        vid = self._extract_video_id_advanced(resolved)
+                        user = self._extract_username_advanced(resolved)
+                        if vid and user:
+                            return 'video', vid, user
+            except Exception:
+                pass
         
         except Exception as e:
             print(f"خطأ في التحقق من صحة الهدف: {e}")

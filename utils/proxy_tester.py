@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import requests
 from urllib.parse import urlparse
+import socks as pysocks
 
 @dataclass
 class ProxyTestResult:
@@ -24,6 +25,7 @@ class ProxyTestResult:
     error_message: Optional[str] = None
     country: Optional[str] = None
     anonymity: Optional[str] = None
+    protocol: Optional[str] = None  # 'http' أو 'socks5h'
 
 class ProxyTester:
     def __init__(self):
@@ -36,50 +38,87 @@ class ProxyTester:
         ]
         self.timeout = 10
         self.max_workers = 10
+
+    def _parse_proxy_line(self, proxy: str) -> Tuple[str, str]:
+        """إرجاع (protocol, url) مع دعم user:pass@host:port وبدون مخطط.
+
+        - إذا كان يحتوي على مخطط http:// أو https:// أو socks5:// أو socks5h://، نعيده كما هو.
+        - إذا كان يحتوي على '@' نعتبره SOCKS5H مع مصادقة: user:pass@host:port.
+        - وإلا ip:port -> socks5h://ip:port ومرشح بديل http://ip:port.
+        """
+        p = proxy.strip()
+        if p.startswith(('http://', 'https://')):
+            return ('http', p)
+        if p.startswith(('socks5://', 'socks5h://')):
+            # طبعاً نفضّل socks5h لتمرير DNS
+            return ('socks5h', p.replace('socks5://', 'socks5h://', 1))
+
+        if '@' in p and ':' in p:
+            # user:pass@host:port
+            return ('socks5h', f"socks5h://{p}")
+
+        # ip:port خام
+        if ':' in p:
+            # سنجرب socks5h أولاً، ويبقى http كبديل في المرشحين لاحقاً
+            return ('socks5h', f"socks5h://{p}")
+
+        # غير معروف، أعده كما هو كـ socks5h
+        return ('socks5h', f"socks5h://{p}")
     
     async def test_proxy_async(self, proxy: str) -> ProxyTestResult:
         """اختبار البروكسي بشكل غير متزامن"""
         start_time = time.time()
         
         try:
-            # اختبار الاتصال الأساسي
-            if not await self._test_connection(proxy):
-                return ProxyTestResult(
-                    proxy=proxy,
-                    is_working=False,
-                    response_time=0,
-                    error_message="فشل في الاتصال الأساسي"
-                )
-            
-            # اختبار HTTP
-            http_result = await self._test_http(proxy)
-            if http_result:
-                response_time = time.time() - start_time
-                return ProxyTestResult(
-                    proxy=proxy,
-                    is_working=True,
-                    response_time=response_time,
-                    country=http_result.get('country'),
-                    anonymity=http_result.get('anonymity')
-                )
-            
-            # اختبار SOCKS5
-            socks_result = await self._test_socks5(proxy)
-            if socks_result:
-                response_time = time.time() - start_time
-                return ProxyTestResult(
-                    proxy=proxy,
-                    is_working=True,
-                    response_time=response_time,
-                    country=socks_result.get('country'),
-                    anonymity=socks_result.get('anonymity')
-                )
+            # إعداد المرشحين بناءً على التحليل
+            candidates: List[Tuple[str, str]] = []  # (url, protocol)
+            proto, url = self._parse_proxy_line(proxy)
+            # جرّب البروتوكول المفضّل أولاً
+            candidates.append((url, proto))
+            # أضف بديلًا إذا كان ip:port (حاول http أيضًا)
+            if '://' not in proxy and ':' in proxy:
+                candidates.append((f"http://{proxy}", 'http'))
+
+            # جرّب المرشحين
+            last_error: Optional[str] = None
+            for prox, proto in candidates:
+                # فحص سريع عبر PySocks إذا كان SOCKS5H: اتصل بـ 8.8.8.8:53 عبر البروكسي
+                if proto.startswith('socks5'):
+                    quick_ok = await self._quick_socks5_tcp_check(prox)
+                    if not quick_ok:
+                        last_error = "فشل فحص PySocks السريع"
+                        continue
+                if proto == 'http':
+                    http_result = await self._test_http(prox)
+                    if http_result:
+                        response_time = time.time() - start_time
+                        return ProxyTestResult(
+                            proxy=prox,
+                            is_working=True,
+                            response_time=response_time,
+                            country=http_result.get('country'),
+                            anonymity=http_result.get('anonymity'),
+                            protocol='http'
+                        )
+                else:
+                    socks_result = await self._test_socks5(prox)
+                    if socks_result:
+                        response_time = time.time() - start_time
+                        return ProxyTestResult(
+                            proxy=prox,
+                            is_working=True,
+                            response_time=response_time,
+                            country=socks_result.get('country'),
+                            anonymity=socks_result.get('anonymity'),
+                            protocol='socks5h'
+                        )
+                last_error = "فشل اختبار البروتوكولات"
             
             return ProxyTestResult(
                 proxy=proxy,
                 is_working=False,
                 response_time=time.time() - start_time,
-                error_message="فشل في جميع اختبارات البروتوكول"
+                error_message=last_error or "فشل في جميع اختبارات البروتوكول"
             )
             
         except Exception as e:
@@ -89,19 +128,47 @@ class ProxyTester:
                 response_time=time.time() - start_time,
                 error_message=str(e)
             )
+
+    async def _quick_socks5_tcp_check(self, proxy_url: str, timeout: float = 5.0) -> bool:
+        """اختبار سريع عبر PySocks: الاتصال بـ 8.8.8.8:53 من خلال البروكسي."""
+        try:
+            parsed = urlparse(proxy_url.replace('socks5h://', 'socks5://', 1))
+            host = parsed.hostname
+            port = parsed.port or 1080
+            username = parsed.username
+            password = parsed.password
+            if not host or not port:
+                return False
+            def _tcp_test() -> bool:
+                s = pysocks.socksocket()
+                s.set_proxy(pysocks.SOCKS5, host, int(port), username=username, password=password)
+                s.settimeout(timeout)
+                try:
+                    s.connect(("8.8.8.8", 53))
+                    return True
+                finally:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, _tcp_test)
+        except Exception:
+            return False
     
     async def _test_connection(self, proxy: str) -> bool:
         """اختبار الاتصال الأساسي"""
         try:
             # تحليل البروكسي
-            if proxy.startswith('socks5://'):
+            if proxy.startswith('socks5://') or proxy.startswith('socks5h://'):
                 host, port = self._parse_socks5_proxy(proxy)
             elif proxy.startswith('http://') or proxy.startswith('https://'):
                 parsed = urlparse(proxy)
                 host, port = parsed.hostname, parsed.port or (80 if parsed.scheme == 'http' else 443)
             else:
-                # افتراض أنه socks5
-                host, port = self._parse_socks5_proxy(f"socks5://{proxy}")
+                # ip:port خام
+                host, port = proxy.split(':', 1)
+                port = int(port)
             
             # اختبار الاتصال
             future = asyncio.get_event_loop().run_in_executor(
@@ -126,7 +193,9 @@ class ProxyTester:
     
     def _parse_socks5_proxy(self, proxy: str) -> Tuple[str, int]:
         """تحليل بروكسي SOCKS5"""
-        if proxy.startswith('socks5://'):
+        if proxy.startswith('socks5h://'):
+            proxy = proxy[10:]
+        elif proxy.startswith('socks5://'):
             proxy = proxy[9:]
         
         if ':' in proxy:
@@ -261,16 +330,23 @@ class ProxyTester:
             'max_response_time': max_response_time
         }
     
-    def format_proxy_for_use(self, proxy: str) -> str:
-        """تنسيق البروكسي للاستخدام"""
-        if proxy.startswith('socks5://'):
-            return proxy
-        
-        # إذا كان البروكسي بصيغة ip:port
-        if ':' in proxy and not proxy.startswith(('http://', 'https://')):
-            return f"socks5://{proxy}"
-        
-        return proxy
+    def format_result_proxy(self, result: ProxyTestResult) -> str:
+        """بناء نص البروكسي النهائي حسب البروتوكول المكتشف"""
+        prox = result.proxy
+        if result.protocol == 'http':
+            if not prox.startswith(('http://', 'https://')):
+                return f"http://{prox}"
+            return prox
+        if result.protocol == 'socks5h':
+            if prox.startswith('socks5://'):
+                return prox.replace('socks5://', 'socks5h://', 1)
+            if not prox.startswith('socks5h://'):
+                return f"socks5h://{prox}"
+            return prox
+        # fallback
+        if prox.startswith('socks5://'):
+            return prox.replace('socks5://', 'socks5h://', 1)
+        return prox
 
 # دالة مساعدة لاختبار البروكسيات
 async def test_proxies(proxy_list: List[str]) -> Tuple[List[str], Dict]:
@@ -295,8 +371,8 @@ async def test_proxies(proxy_list: List[str]) -> Tuple[List[str], Dict]:
     # الحصول على الإحصائيات
     stats = tester.get_proxy_stats(results)
     
-    # تنسيق البروكسيات العاملة
-    formatted_proxies = [tester.format_proxy_for_use(r.proxy) for r in working_proxies]
+    # تنسيق البروكسيات العاملة وفق البروتوكول المكتشف
+    formatted_proxies = [tester.format_result_proxy(r) for r in working_proxies]
     
     return formatted_proxies, stats
 
