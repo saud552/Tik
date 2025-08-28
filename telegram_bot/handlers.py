@@ -9,8 +9,10 @@ from core.tiktok_reporter import TikTokReporter
 from models.job import ReportType
 from telegram_bot.keyboards import TikTokKeyboards
 from config.settings import ADMIN_USER_ID, ADMIN_USER_IDS, REPORT_REASONS
+from utils.reason_mapping import ReasonMapping
+from pathlib import Path
 from core.web_login_automator import TikTokWebLoginAutomator
-from core.report_schema_fetcher import fetch_report_schema
+from core.report_schema_fetcher import fetch_report_schema, refresh_report_schema
 
 # حالات المحادثة
 (
@@ -30,6 +32,8 @@ class TikTokHandlers:
         self.scheduler = ReportScheduler(self.account_manager)
         self.reporter = TikTokReporter()
         self.user_states = {}  # لتخزين حالة المستخدم
+        # مُحمّل خريطة الأسباب الديناميكية
+        self.reason_mapping = ReasonMapping(Path("config/reason_mapping.json"))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر البداية"""
@@ -40,6 +44,15 @@ class TikTokHandlers:
             await update.message.reply_text("❌ عذراً، هذا البوت متاح للمدير فقط.")
             return
         
+        # دعم أوامر إدارية سريعة مع start: /start refresh_schema أو /start show_schema
+        txt = update.message.text or ""
+        if "refresh_schema" in txt:
+            await self.admin_refresh_schema(update, context)
+            return
+        if "show_schema" in txt:
+            await self.admin_show_schema(update, context)
+            return
+
         await update.message.reply_text(
             "🎉 مرحباً بك في بوت بلاغات TikTok!\n\n"
             "اختر الخيار المطلوب من القائمة أدناه:",
@@ -70,6 +83,8 @@ class TikTokHandlers:
             await self.show_statistics(query)
         elif query.data == "main_menu":
             await self.start_command(update, context)
+        elif query.data == "web_login_all":
+            await self.handle_web_login_all(query)
     
     async def start_report_process(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """بدء عملية البلاغ"""
@@ -103,6 +118,101 @@ class TikTokHandlers:
         )
         
         return WAITING_FOR_TARGET
+
+    async def handle_web_login_all(self, query):
+        """تسجيل دخول ويب لكل الحسابات النشطة لاستخراج الكوكيز وحفظها"""
+        await query.edit_message_text("🔐 جاري تسجيل الدخول عبر الويب لجميع الحسابات النشطة...\nقد يستغرق ذلك بضع دقائق.")
+        accounts = self.account_manager.get_all_accounts()
+        if not accounts:
+            await query.edit_message_text("❌ لا توجد حسابات.", reply_markup=TikTokKeyboards.get_main_menu())
+            return
+        ok_count = 0
+        fail_count = 0
+        details = []
+        try:
+            reporter = self.reporter
+            for account in accounts:
+                if account.status != 'active':
+                    continue
+                pw = self.account_manager.get_decrypted_password(account.id) or ""
+                try:
+                    res = await reporter.web_login_and_store_cookies(account, pw)
+                    if res:
+                        ok_count += 1
+                        details.append(f"✅ {account.username}")
+                    else:
+                        fail_count += 1
+                        details.append(f"❌ {account.username}")
+                except Exception as e:
+                    fail_count += 1
+                    details.append(f"❌ {account.username}: {e}")
+            msg = (
+                "🔐 تسجيل دخول الويب - النتيجة:\n"
+                f"نجاح: {ok_count} | فشل: {fail_count}\n\n" + "\n".join(details[:30])
+            )
+            await query.edit_message_text(msg, reply_markup=TikTokKeyboards.get_main_menu())
+        except Exception as e:
+            await query.edit_message_text(f"❌ فشل العملية: {e}", reply_markup=TikTokKeyboards.get_main_menu())
+
+    async def admin_refresh_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """تحديث قسري لمخطط الفئات وتفريغ الكاش مع دعم تمرير رابط فيديو أو @username."""
+        user = update.effective_user
+        if not user or (user.id not in set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))):
+            return
+        args = []
+        try:
+            # python-telegram-bot يوفر context.args مع CommandHandler
+            args = getattr(context, 'args', None) or []
+        except Exception:
+            args = []
+
+        target_video_url = None
+        target_account_url = None
+        if args:
+            arg = " ".join(args).strip()
+            if arg.startswith("http"):
+                # اعتبره رابط فيديو/محتوى
+                target_video_url = arg
+            else:
+                # اعتبره اسم مستخدم
+                username = arg[1:] if arg.startswith("@") else arg
+                if username:
+                    target_account_url = f"https://www.tiktok.com/@{username}"
+
+        await update.message.reply_text("🔄 جاري تحديث مخطط البلاغات...")
+        try:
+            v = await refresh_report_schema('video', target_video_url)
+            a = await refresh_report_schema('account', target_account_url)
+            await update.message.reply_text(
+                "✅ تم التحديث.\n"
+                f"video: source={v.source}, cats={len(v.categories)}\n"
+                f"account: source={a.source}, cats={len(a.categories)}"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ فشل التحديث: {e}")
+
+    async def admin_show_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """عرض موجز عن المخطط الحالي من الكاش مع تعداد أدق للعناصر."""
+        user = update.effective_user
+        if not user or (user.id not in set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))):
+            return
+        try:
+            v = await fetch_report_schema('video')
+            a = await fetch_report_schema('account')
+            def summarize(schema):
+                parts = []
+                for c in (schema.categories or []):
+                    items = c.get('items', [])
+                    title = c.get('title', 'Category')
+                    parts.append(f"- {title}: {len(items)} عنصر")
+                return "\n".join(parts) if parts else "(لا توجد فئات)"
+            await update.message.reply_text(
+                "📋 المخطط الحالي:\n"
+                f"video (source={v.source}, cats={len(v.categories)}):\n{summarize(v)}\n\n"
+                f"account (source={a.source}, cats={len(a.categories)}):\n{summarize(a)}"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ فشل العرض: {e}")
     
     async def handle_target_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة إدخال الهدف"""
@@ -160,7 +270,7 @@ class TikTokHandlers:
             return ConversationHandler.END
         
         if query.data.startswith("dynitem_"):
-            # اختيار سبب ديناميكي بالنص
+            # اختيار سبب ديناميكي بالنص ومحاولة تحويله إلى سبب رقمي عبر mapping الخارجي
             rid = query.data.split("_", 1)[1]
             user_id = query.from_user.id
             schema = self.user_states[user_id].get('report_schema')
@@ -174,12 +284,31 @@ class TikTokHandlers:
             except Exception:
                 pass
             self.user_states[user_id]['selected_reason_text'] = reason_text
-            await query.edit_message_text(
-                f"✅ تم اختيار نوع البلاغ: {reason_text}\n\n"
-                "أدخل عدد البلاغات المراد تنفيذها من كل حساب (رقم صحيح):",
-                reply_markup=TikTokKeyboards.get_cancel_keyboard()
-            )
-            return WAITING_FOR_REPORTS_COUNT
+
+            # تحديد النطاق (video/account) بناءً على نوع البلاغ الحالي
+            scope = 'video' if self.user_states[user_id]['report_type'] == ReportType.VIDEO else 'account'
+            mapped = None
+            try:
+                mapped = self.reason_mapping.resolve(scope, rid)
+            except Exception:
+                mapped = None
+            if isinstance(mapped, int):
+                # تم إيجاد رقم سبب صالح
+                self.user_states[user_id]['reason'] = mapped
+                await query.edit_message_text(
+                    f"✅ تم اختيار نوع البلاغ: {reason_text} (code: {mapped})\n\n"
+                    "أدخل عدد البلاغات المراد تنفيذها من كل حساب (رقم صحيح):",
+                    reply_markup=TikTokKeyboards.get_cancel_keyboard()
+                )
+                return WAITING_FOR_REPORTS_COUNT
+            else:
+                # لم يتم إيجاد تعيين رقمي؛ إرشاد المستخدم للعودة للفئات الثابتة أو اختيار من القائمة العامة
+                await query.edit_message_text(
+                    "⚠️ لا يوجد تعيين رقمي معتمد لهذا السبب الديناميكي.\n"
+                    "يرجى اختيار السبب من الفئات الثابتة أو الضغط على 'عرض جميع الأسباب'.",
+                    reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[user_id]['report_type'].value)
+                )
+                return WAITING_FOR_REASON
 
         if query.data.startswith("dyncat_"):
             # عرض عناصر الفئة المختارة

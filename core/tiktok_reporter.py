@@ -24,6 +24,7 @@ from config.settings import (
 )
 from models.account import TikTokAccount
 from core.web_login_automator import TikTokWebLoginAutomator
+from utils.metrics_logger import incr
 
 class TikTokReporter:
     def __init__(self, account_manager=None):
@@ -84,8 +85,13 @@ class TikTokReporter:
         """تسجيل دخول ويب عبر Playwright وتخزين الكوكيز في الحساب"""
         try:
             proxy = account.proxy
+            # المحاولة 1: وضع headless
             automator = TikTokWebLoginAutomator(headless=True)
             cookies_dict = await automator.login_and_get_cookies(account.username, password, proxy=proxy)
+            # المحاولة 2: وضع non-headless إذا لم تُلتقط كوكيز
+            if not cookies_dict:
+                automator2 = TikTokWebLoginAutomator(headless=False)
+                cookies_dict = await automator2.login_and_get_cookies(account.username, password, proxy=proxy)
             # تحقق من وجود كوكيز أساسية
             if not cookies_dict:
                 return False
@@ -642,6 +648,10 @@ class TikTokReporter:
                 success = await self._report_video_mobile(video_id, user_id, reason, device_info)
                 if success:
                     print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Mobile API")
+                    try:
+                        incr("video_success", 1)
+                    except Exception:
+                        pass
                     account.mark_success()
                     return True
             except Exception as e:
@@ -653,6 +663,10 @@ class TikTokReporter:
                     success = await self._report_video_web(video_id, user_id, reason)
                     if success:
                         print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Web API")
+                        try:
+                            incr("video_success", 1)
+                        except Exception:
+                            pass
                         account.mark_success()
                         return True
                 except Exception as e:
@@ -660,6 +674,10 @@ class TikTokReporter:
             
             if not success:
                 error_msg = "فشل في جميع محاولات الإبلاغ"
+                try:
+                    incr("video_fail", 1)
+                except Exception:
+                    pass
                 account.mark_failure(error_msg)
                 print(f"❌ {error_msg}")
                 return False
@@ -716,12 +734,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][video][mobile] status={response.status_code} video_id={video_id} owner_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0:
+                        print(f"[REPORT_SUCCESS][video][mobile] video_id={video_id} owner_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
@@ -764,12 +788,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][video][web] status={response.status_code} video_id={video_id} owner_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0 or result.get('success') is True:
+                        print(f"[REPORT_SUCCESS][video][web] video_id={video_id} owner_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
@@ -811,6 +841,10 @@ class TikTokReporter:
                 success = await self._report_account_mobile(target_user_id, reason, device_info)
                 if success:
                     print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Mobile API")
+                    try:
+                        incr("account_success", 1)
+                    except Exception:
+                        pass
                     account.mark_success()
                     return True
             except Exception as e:
@@ -822,6 +856,10 @@ class TikTokReporter:
                     success = await self._report_account_web(target_user_id, reason)
                     if success:
                         print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Web API")
+                        try:
+                            incr("account_success", 1)
+                        except Exception:
+                            pass
                         account.mark_success()
                         return True
                 except Exception as e:
@@ -829,6 +867,10 @@ class TikTokReporter:
             
             if not success:
                 error_msg = "فشل في جميع محاولات الإبلاغ"
+                try:
+                    incr("account_fail", 1)
+                except Exception:
+                    pass
                 account.mark_failure(error_msg)
                 print(f"❌ {error_msg}")
                 return False
@@ -884,12 +926,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][account][mobile] status={response.status_code} user_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0:
+                        print(f"[REPORT_SUCCESS][account][mobile] user_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
@@ -931,12 +979,18 @@ class TikTokReporter:
                 data=report_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
-            
+            try:
+                body_preview = response.text[:300]
+            except Exception:
+                body_preview = '<no-body>'
+            print(f"[REPORT][account][web] status={response.status_code} user_id={user_id} reason={reason} body_preview={body_preview}")
+
             if response.status_code == 200:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
                     if result.get('status_code') == 0 or result.get('success') is True:
+                        print(f"[REPORT_SUCCESS][account][web] user_id={user_id} reason={reason}")
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
