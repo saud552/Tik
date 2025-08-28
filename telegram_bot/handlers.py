@@ -1,3 +1,6 @@
+import asyncio
+import re
+from urllib.parse import urlparse
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from core.account_manager import TikTokAccountManager
@@ -6,6 +9,7 @@ from core.tiktok_reporter import TikTokReporter
 from models.job import ReportType
 from telegram_bot.keyboards import TikTokKeyboards
 from config.settings import ADMIN_USER_ID, REPORT_REASONS
+from core.web_login_automator import TikTokWebLoginAutomator
 
 # حالات المحادثة
 (
@@ -14,9 +18,10 @@ from config.settings import ADMIN_USER_ID, REPORT_REASONS
     WAITING_FOR_TARGET,
     WAITING_FOR_REASON,
     WAITING_FOR_REPORTS_COUNT,
+    WAITING_FOR_INTERVAL,
     WAITING_FOR_CONFIRMATION,
     WAITING_FOR_PROXIES
-) = range(7)
+) = range(8)
 
 class TikTokHandlers:
     def __init__(self):
@@ -210,21 +215,50 @@ class TikTokHandlers:
             user_id = query.from_user.id
             self.user_states[user_id]['reports_per_account'] = reports_count
             
-            # طلب البروكسيات (SOCKS5) اختيارياً
+            # طلب الفاصل الزمني بين البلاغات
             await query.edit_message_text(
-                "🧩 هل تريد إضافة بروكسيات SOCKS5؟\n"
-                "أرسل قائمة البروكسيات بهذا الشكل (سطر لكل بروكسي):\n"
-                "ip:port\n\n"
-                "أرسل كلمة تخطي لتجاوز هذه الخطوة.",
+                "⏱️ أدخل الفاصل الزمني بالثواني بين كل عملية بلاغ والتي تليها:\n\n"
+                "مثال: 5",
                 reply_markup=TikTokKeyboards.get_cancel_keyboard()
             )
-            return WAITING_FOR_PROXIES
+            return WAITING_FOR_INTERVAL
         elif query.data == "back_to_reasons":
             await query.edit_message_text(
                 "اختر نوع البلاغ:",
                 reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[query.from_user.id]['report_type'].value)
             )
             return WAITING_FOR_REASON
+
+    async def handle_interval_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """استقبال الفاصل الزمني ثم الانتقال لإدخال البروكسيات"""
+        if not update or not update.message or not update.message.from_user:
+            return ConversationHandler.END
+        user_id = update.message.from_user.id
+        if user_id not in self.user_states:
+            await update.message.reply_text("❌ جلسة منتهية. يرجى البدء من جديد.")
+            return ConversationHandler.END
+
+        text = update.message.text.strip()
+        try:
+            interval = int(text)
+            if interval < 0:
+                raise ValueError
+            self.user_states[user_id]['interval_seconds'] = interval
+        except Exception:
+            await update.message.reply_text(
+                "❌ قيمة غير صحيحة. أدخل رقمًا صحيحًا (ثوانٍ).",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
+            )
+            return WAITING_FOR_INTERVAL
+
+        await update.message.reply_text(
+            "🧩 هل تريد إضافة بروكسيات SOCKS5؟\n"
+            "أرسل قائمة البروكسيات بهذا الشكل (سطر لكل بروكسي):\n"
+            "ip:port\n\n"
+            "أرسل كلمة تخطي لتجاوز هذه الخطوة.",
+            reply_markup=TikTokKeyboards.get_cancel_keyboard()
+        )
+        return WAITING_FOR_PROXIES
     
     async def handle_confirmation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """معالجة تأكيد المهمة"""
@@ -270,23 +304,194 @@ class TikTokHandlers:
                     )
                     return ConversationHandler.END
 
-                # إنشاء مهمة البلاغ
-                job_id = await self.scheduler.queue_job(
-                    report_type=state['report_type'],
-                    target=state['target'],
-                    reason=state['reason'],
-                    reports_per_account=state['reports_per_account'],
-                    socks5_proxies=state.get('socks5_proxies')
-                )
-                
-                await query.edit_message_text(
-                    f"✅ تم إنشاء مهمة البلاغ بنجاح!\n\n"
-                    f"🆔 معرف المهمة: {job_id}\n"
-                    f"📊 يمكنك متابعة التقدم من قائمة 'حالة المهام'\n\n"
-                    f"🚀 بدأت العملية تلقائياً...",
-                    reply_markup=TikTokKeyboards.get_main_menu()
-                )
-                
+                # إن كان البلاغ على حساب: استخدم مسار الويب فقط مع تحديث رسالة التقدم دوريًا
+                if state['report_type'] == ReportType.ACCOUNT:
+                    msg = await query.edit_message_text(
+                        "🚀 بدء عملية البلاغ عبر مسار الويب فقط...\n\n"
+                        "سيتم تحديث هذه الرسالة بالتقدم حتى الانتهاء.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+
+                    async def run_web_only_progress(chat_id: int, message_id: int):
+                        # استخراج username من الإدخال
+                        def extract_username(target: str) -> str:
+                            target = target.strip()
+                            if target.startswith('@'):
+                                return target[1:]
+                            if target.startswith('http://') or target.startswith('https://'):
+                                try:
+                                    parsed = urlparse(target)
+                                    m = re.search(r'/@([^/]+)', parsed.path)
+                                    if m:
+                                        return m.group(1)
+                                except Exception:
+                                    pass
+                            return target
+
+                        # تحضير الحساب والجلسة
+                        account = None
+                        try:
+                            accounts = self.account_manager.get_healthy_accounts()
+                            if not accounts:
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text="❌ لا توجد حسابات سليمة متاحة.")
+                                return
+                            account = accounts[0]
+                            password_plain = self.account_manager.get_decrypted_password(account.id)
+                            if not password_plain:
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text="❌ تعذر فك تشفير كلمة مرور الحساب.")
+                                return
+
+                            # تسجيل دخول ويب (قد يتطلب بعض الوقت)
+                            await self.reporter.web_login_and_store_cookies(account, password_plain)
+
+                            # استخراج user_id عبر Playwright مباشرةً
+                            async def get_user_id_via_playwright(user: str) -> str | None:
+                                autom = TikTokWebLoginAutomator(headless=True)
+                                # استخدم نفس الأتمتة لفتح الصفحة فقط عبر نفس المتصفح؟ سنفتح سياق جديد ونقرأ المحتوى
+                                from playwright.async_api import async_playwright
+                                pw = await async_playwright().start()
+                                browser = await pw.chromium.launch(headless=True)
+                                context_pw = await browser.new_context(
+                                    user_agent=(
+                                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                    )
+                                )
+                                page = await context_pw.new_page()
+                                try:
+                                    await page.goto(f"https://www.tiktok.com/@{user}", wait_until="networkidle")
+                                    html = await page.content()
+                                    m = re.search(r'<meta[^>]+content="tiktok://user/(\d+)"', html)
+                                    if m:
+                                        return m.group(1)
+                                    m = re.search(r'"id":"(\d+)"', html)
+                                    if m:
+                                        return m.group(1)
+                                    m = re.search(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', html)
+                                    if m:
+                                        j = m.group(1)
+                                        mm = re.search(r'"id":"(\d+)"', j)
+                                        if mm:
+                                            return mm.group(1)
+                                    return None
+                                finally:
+                                    try:
+                                        await context_pw.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await browser.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await pw.stop()
+                                    except Exception:
+                                        pass
+
+                            username = extract_username(state['target'])
+                            user_id_web = await get_user_id_via_playwright(username)
+                            if not user_id_web:
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text="❌ تعذر استخراج user_id من صفحة المستخدم.")
+                                return
+
+                            total = state['reports_per_account']
+                            interval = state.get('interval_seconds', 0) or 0
+                            proxies = state.get('socks5_proxies') or []
+                            proxy_index = 0
+                            success = 0
+                            failed = 0
+
+                            # رسالة تقدم أولية
+                            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                text=(
+                                    "🚀 بدء البلاغ عبر الويب فقط\n\n"
+                                    f"👤 الهدف: @{username}\n"
+                                    f"🆔 user_id: {user_id_web}\n"
+                                    f"🚨 السبب: {state['reason']}\n"
+                                    f"🔢 العدد: {total}\n"
+                                    f"⏱️ الفاصل: {interval}s\n"
+                                    f"🌐 بروكسيات: {len(proxies)}\n\n"
+                                    f"التقدم: 0/{total}"
+                                )
+                            )
+
+                            for i in range(total):
+                                # تدوير البروكسي إن وجد
+                                if proxies:
+                                    if proxy_index >= len(proxies):
+                                        proxy_index = 0
+                                    socks = proxies[proxy_index]
+                                    if socks.startswith('socks5://') and not socks.startswith('socks5h://'):
+                                        socks = socks.replace('socks5://', 'socks5h://', 1)
+                                    proxy_index += 1
+                                    self.reporter.session.proxies.update({'http': socks, 'https': socks})
+                                else:
+                                    self.reporter.session.proxies.pop('http', None)
+                                    self.reporter.session.proxies.pop('https', None)
+
+                                ok = await self.reporter._report_account_web(user_id_web, state['reason'])
+                                if ok:
+                                    success += 1
+                                else:
+                                    failed += 1
+
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text=(
+                                        "🚀 البلاغ عبر الويب فقط (جارٍ)\n\n"
+                                        f"👤 الهدف: @{username}\n"
+                                        f"🆔 user_id: {user_id_web}\n"
+                                        f"🚨 السبب: {state['reason']}\n"
+                                        f"🔢 العدد: {total}\n"
+                                        f"⏱️ الفاصل: {interval}s\n"
+                                        f"🌐 بروكسيات: {len(proxies)}\n\n"
+                                        f"التقدم: {success + failed}/{total} | ✅ {success} | ❌ {failed}"
+                                    )
+                                )
+
+                                if i < total - 1 and interval > 0:
+                                    await asyncio.sleep(interval)
+
+                            # النهاية
+                            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                text=(
+                                    "🎉 اكتملت عملية البلاغ عبر الويب فقط\n\n"
+                                    f"👤 الهدف: @{username}\n"
+                                    f"🆔 user_id: {user_id_web}\n"
+                                    f"🚨 السبب: {state['reason']}\n"
+                                    f"🔢 العدد: {total}\n"
+                                    f"⏱️ الفاصل: {interval}s\n"
+                                    f"🌐 بروكسيات: {len(proxies)}\n\n"
+                                    f"النتيجة النهائية: ✅ {success} | ❌ {failed}"
+                                )
+                            )
+
+                        except Exception as e:
+                            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                text=f"❌ خطأ أثناء تنفيذ البلاغ: {e}")
+
+                    # إطلاق المهمة في الخلفية
+                    asyncio.create_task(run_web_only_progress(query.message.chat_id, msg.message_id))
+
+                else:
+                    # إنشاء مهمة البلاغ الافتراضية للفيديو (المسار القائم)
+                    job_id = await self.scheduler.queue_job(
+                        report_type=state['report_type'],
+                        target=state['target'],
+                        reason=state['reason'],
+                        reports_per_account=state['reports_per_account'],
+                        socks5_proxies=state.get('socks5_proxies')
+                    )
+                    await query.edit_message_text(
+                        f"✅ تم إنشاء مهمة البلاغ بنجاح!\n\n"
+                        f"🆔 معرف المهمة: {job_id}\n"
+                        f"📊 يمكنك متابعة التقدم من قائمة 'حالة المهام'\n\n"
+                        f"🚀 بدأت العملية تلقائياً...",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+
                 # تنظيف حالة المستخدم
                 del self.user_states[user_id]
                 

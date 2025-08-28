@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
     WAITING_FOR_TARGET,
     WAITING_FOR_REASON,
     WAITING_FOR_REPORTS_COUNT,
+    WAITING_FOR_INTERVAL,
     WAITING_FOR_CONFIRMATION,
     WAITING_FOR_PROXIES
-) = range(7)
+) = range(8)
 
 class TikTokBot:
     def __init__(self):
@@ -67,6 +68,9 @@ class TikTokBot:
                 ],
                 WAITING_FOR_REPORTS_COUNT: [
                     CallbackQueryHandler(self.handlers.handle_reports_count_selection)
+                ],
+                WAITING_FOR_INTERVAL: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_interval_input)
                 ],
                 WAITING_FOR_PROXIES: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_proxies_input)
