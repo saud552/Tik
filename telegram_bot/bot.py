@@ -89,7 +89,7 @@ class TikTokBot:
         # معالج القوائم الرئيسية (تقييد النمط لمنع اعتراض أزرار أخرى)
         main_menu_handler = CallbackQueryHandler(
             self.handlers.main_menu_callback,
-            pattern='^(manage_accounts|report_video|report_account|job_status|statistics|main_menu)$'
+            pattern='^(manage_accounts|report_video|report_account|web_login_all|job_status|statistics|main_menu)$'
         )
         self.application.add_handler(main_menu_handler)
         
