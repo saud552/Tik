@@ -53,9 +53,10 @@ class TikTokHandlers:
                 reply_markup=TikTokKeyboards.get_account_management_menu()
             )
         elif query.data == "report_video":
-            await self.start_report_process(query, ReportType.VIDEO)
+            # تمرير Update و Context كما تتوقع دالة start_report_process
+            await self.start_report_process(update, context)
         elif query.data == "report_account":
-            await self.start_report_process(query, ReportType.ACCOUNT)
+            await self.start_report_process(update, context)
         elif query.data == "job_status":
             await self.show_job_status(query)
         elif query.data == "statistics":
