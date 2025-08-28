@@ -366,6 +366,22 @@ class TikTokReporter:
         except Exception as e:
             print(f"❌ خطأ في استخراج معرف الفيديو: {e}")
             return None
+
+    def _resolve_short_url(self, url: str) -> str:
+        """تتبع روابط TikTok المختصرة (vt/vm) إلى الرابط النهائي إن أمكن"""
+        try:
+            resp = self.session.get(url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=True)
+            # استخدم URL النهائي إن توفر
+            final_url = getattr(resp, 'url', None)
+            if isinstance(final_url, str) and final_url:
+                return final_url
+            # fallback إلى ترويسة Location
+            loc = resp.headers.get('Location')
+            if loc:
+                return loc
+        except Exception:
+            pass
+        return url
     
     def _extract_username_advanced(self, url: str) -> Optional[str]:
         """استخراج اسم المستخدم بطريقة متقدمة"""
@@ -972,6 +988,21 @@ class TikTokReporter:
                 # محاولة استخراج كاسم مستخدم
                 if self._is_valid_username(target):
                     return 'account', target, None
+
+            # دعم روابط مختصرة من vt.tiktok.com أو vm.tiktok.com
+            try:
+                parsed = urlparse(normalized_target)
+                short_domains = {'vt.tiktok.com', 'vm.tiktok.com'}
+                if parsed.netloc.lower() in short_domains:
+                    resolved = self._resolve_short_url(normalized_target)
+                    # حاول مجددًا استخراج الفيديو بعد التحويل
+                    if '/video/' in resolved or '/v/' in resolved:
+                        vid = self._extract_video_id_advanced(resolved)
+                        user = self._extract_username_advanced(resolved)
+                        if vid and user:
+                            return 'video', vid, user
+            except Exception:
+                pass
         
         except Exception as e:
             print(f"خطأ في التحقق من صحة الهدف: {e}")
