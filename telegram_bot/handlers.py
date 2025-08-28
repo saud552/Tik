@@ -63,9 +63,14 @@ class TikTokHandlers:
         elif query.data == "main_menu":
             await self.start_command(update, context)
     
-    async def start_report_process(self, query, report_type: ReportType):
+    async def start_report_process(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """بدء عملية البلاغ"""
+        if not update or not update.callback_query:
+            return ConversationHandler.END
+        query = update.callback_query
         user_id = query.from_user.id
+        data = query.data or ""
+        report_type = ReportType.VIDEO if data == "report_video" else ReportType.ACCOUNT
         self.user_states[user_id] = {
             'report_type': report_type,
             'target': None,
