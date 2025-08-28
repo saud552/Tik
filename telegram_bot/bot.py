@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters as tg_filters, ConversationHandler
 from config.settings import TELEGRAM_BOT_TOKEN
 from telegram_bot.handlers import TikTokHandlers
 from telegram_bot.keyboards import TikTokKeyboards
@@ -43,10 +43,10 @@ class TikTokBot:
             ],
             states={
                 WAITING_FOR_USERNAME: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_username_input)
+                    MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, self.handle_username_input)
                 ],
                 WAITING_FOR_PASSWORD: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_password_input)
+                    MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, self.handle_password_input)
                 ]
             },
             fallbacks=[CommandHandler('cancel', self.handlers.cancel_command)]
@@ -60,7 +60,7 @@ class TikTokBot:
             ],
             states={
                 WAITING_FOR_TARGET: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_target_input)
+                    MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, self.handlers.handle_target_input)
                 ],
                 WAITING_FOR_REASON: [
                     CallbackQueryHandler(self.handlers.handle_reason_selection)
@@ -69,7 +69,7 @@ class TikTokBot:
                     CallbackQueryHandler(self.handlers.handle_reports_count_selection)
                 ],
                 WAITING_FOR_PROXIES: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_proxies_input)
+                    MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, self.handlers.handle_proxies_input)
                 ],
                 WAITING_FOR_CONFIRMATION: [
                     CallbackQueryHandler(self.handlers.handle_confirmation)
@@ -317,4 +317,4 @@ class TikTokBot:
 # تشغيل البوت
 if __name__ == "__main__":
     bot = TikTokBot()
-    asyncio.run(bot.run())
+    bot.run()
