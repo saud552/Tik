@@ -85,8 +85,13 @@ class TikTokReporter:
         """تسجيل دخول ويب عبر Playwright وتخزين الكوكيز في الحساب"""
         try:
             proxy = account.proxy
+            # المحاولة 1: وضع headless
             automator = TikTokWebLoginAutomator(headless=True)
             cookies_dict = await automator.login_and_get_cookies(account.username, password, proxy=proxy)
+            # المحاولة 2: وضع non-headless إذا لم تُلتقط كوكيز
+            if not cookies_dict:
+                automator2 = TikTokWebLoginAutomator(headless=False)
+                cookies_dict = await automator2.login_and_get_cookies(account.username, password, proxy=proxy)
             # تحقق من وجود كوكيز أساسية
             if not cookies_dict:
                 return False
