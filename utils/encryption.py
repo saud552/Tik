@@ -5,18 +5,21 @@ from config.settings import ENCRYPTION_KEY
 class CredentialEncryption:
     def __init__(self):
         self.key = self._generate_key()
-        self.cipher_suite = Fernet(self.key)
+        try:
+            self.cipher_suite = Fernet(self.key)
+        except Exception:
+            # إذا كانت قيمة البيئة غير صالحة، نولّد مفتاحاً جديداً آمنًا
+            self.key = Fernet.generate_key()
+            self.cipher_suite = Fernet(self.key)
     
     def _generate_key(self):
         """توليد مفتاح التشفير"""
-        if len(ENCRYPTION_KEY) >= 32:
-            # استخدام المفتاح المحدد في الإعدادات
-            key = ENCRYPTION_KEY[:32].encode()
-        else:
-            # توليد مفتاح جديد
-            key = Fernet.generate_key()
-        
-        return key
+        env_key = ENCRYPTION_KEY or ""
+        if env_key:
+            # نعتبر أن المفتاح الممرر هو مفتاح Fernet بصيغة base64 urlsafe
+            return env_key.encode()
+        # توليد مفتاح جديد إذا لم تُحدد قيمة
+        return Fernet.generate_key()
     
     def encrypt(self, data: str) -> str:
         """تشفير البيانات"""

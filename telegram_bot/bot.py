@@ -278,11 +278,10 @@ class TikTokBot:
                 reply_markup=TikTokKeyboards.get_main_menu()
             )
     
-    async def run(self):
-        """تشغيل البوت"""
+    def run(self):
+        """تشغيل البوت (حاجب)"""
         logger.info("بدء تشغيل بوت بلاغات TikTok...")
-        # تشغيل polling بطريقة متوافقة مع PTB v20
-        await asyncio.to_thread(self.application.run_polling)
+        self.application.run_polling()
 
 # تشغيل البوت
 if __name__ == "__main__":

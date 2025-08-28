@@ -30,7 +30,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-async def main():
+def main():
     """الدالة الرئيسية"""
     try:
         # التحقق من وجود التوكن
@@ -50,7 +50,7 @@ async def main():
         
         # إنشاء وتشغيل البوت
         bot = TikTokBot()
-        await bot.run()
+        bot.run()
         
     except KeyboardInterrupt:
         logger.info("⏹️ تم إيقاف البوت بواسطة المستخدم")
@@ -73,4 +73,4 @@ if __name__ == "__main__":
     print("=" * 50)
     
     # تشغيل النظام
-    asyncio.run(main())
+    main()
