@@ -22,6 +22,7 @@ class TikTokKeyboards:
             [InlineKeyboardButton("🔐 التحكم بحسابات TikTok", callback_data="manage_accounts")],
             [InlineKeyboardButton("📹 الإبلاغ عن فيديو", callback_data="report_video")],
             [InlineKeyboardButton("👤 الإبلاغ عن حساب", callback_data="report_account")],
+            [InlineKeyboardButton("🧭 تسجيل دخول الويب للحسابات", callback_data="web_login_all")],
             [InlineKeyboardButton("📊 حالة المهام", callback_data="job_status")],
             [InlineKeyboardButton("📈 إحصائيات", callback_data="statistics")]
         ]

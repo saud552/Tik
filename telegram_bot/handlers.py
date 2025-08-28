@@ -83,6 +83,8 @@ class TikTokHandlers:
             await self.show_statistics(query)
         elif query.data == "main_menu":
             await self.start_command(update, context)
+        elif query.data == "web_login_all":
+            await self.handle_web_login_all(query)
     
     async def start_report_process(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """بدء عملية البلاغ"""
@@ -116,6 +118,41 @@ class TikTokHandlers:
         )
         
         return WAITING_FOR_TARGET
+
+    async def handle_web_login_all(self, query):
+        """تسجيل دخول ويب لكل الحسابات النشطة لاستخراج الكوكيز وحفظها"""
+        await query.edit_message_text("🔐 جاري تسجيل الدخول عبر الويب لجميع الحسابات النشطة...\nقد يستغرق ذلك بضع دقائق.")
+        accounts = self.account_manager.get_all_accounts()
+        if not accounts:
+            await query.edit_message_text("❌ لا توجد حسابات.", reply_markup=TikTokKeyboards.get_main_menu())
+            return
+        ok_count = 0
+        fail_count = 0
+        details = []
+        try:
+            reporter = self.reporter
+            for account in accounts:
+                if account.status != 'active':
+                    continue
+                pw = self.account_manager.get_decrypted_password(account.id) or ""
+                try:
+                    res = await reporter.web_login_and_store_cookies(account, pw)
+                    if res:
+                        ok_count += 1
+                        details.append(f"✅ {account.username}")
+                    else:
+                        fail_count += 1
+                        details.append(f"❌ {account.username}")
+                except Exception as e:
+                    fail_count += 1
+                    details.append(f"❌ {account.username}: {e}")
+            msg = (
+                "🔐 تسجيل دخول الويب - النتيجة:\n"
+                f"نجاح: {ok_count} | فشل: {fail_count}\n\n" + "\n".join(details[:30])
+            )
+            await query.edit_message_text(msg, reply_markup=TikTokKeyboards.get_main_menu())
+        except Exception as e:
+            await query.edit_message_text(f"❌ فشل العملية: {e}", reply_markup=TikTokKeyboards.get_main_menu())
 
     async def admin_refresh_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """تحديث قسري لمخطط الفئات وتفريغ الكاش مع دعم تمرير رابط فيديو أو @username."""
