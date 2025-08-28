@@ -5,7 +5,17 @@ import re
 import json
 import uuid
 from typing import Optional, Dict, Tuple
-from config.settings import TIKTOK_BASE_URL, TIKTOK_API_BASE, HUMAN_DELAYS
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from config.settings import (
+    TIKTOK_BASE_URL,
+    TIKTOK_API_BASE,
+    HUMAN_DELAYS,
+    HTTP_TIMEOUT_SECONDS,
+    HTTP_MAX_RETRIES,
+    HTTP_BACKOFF_FACTOR,
+    HTTP_PROXIES,
+)
 from models.account import TikTokAccount
 
 class TikTokReporter:
@@ -31,6 +41,30 @@ class TikTokReporter:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         })
+
+        # Configure retries and backoff
+        retries = Retry(
+            total=HTTP_MAX_RETRIES,
+            backoff_factor=HTTP_BACKOFF_FACTOR,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST"),
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
+        # Optional proxies from env
+        if HTTP_PROXIES:
+            # Support format "http://...;https://..."
+            parts = [p.strip() for p in HTTP_PROXIES.split(";") if p.strip()]
+            proxies: Dict[str, str] = {}
+            for p in parts:
+                if p.startswith("http://"):
+                    proxies["http"] = p
+                elif p.startswith("https://"):
+                    proxies["https"] = p
+            if proxies:
+                self.session.proxies.update(proxies)
     
     def _simulate_human_delay(self, min_delay: Optional[float] = None, max_delay: Optional[float] = None):
         """محاكاة تأخير بشري"""
@@ -100,7 +134,7 @@ class TikTokReporter:
             response = self.session.post(
                 f"{TIKTOK_BASE_URL}/passport/web/login/",
                 data=login_data,
-                timeout=30
+                timeout=HTTP_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:
@@ -151,7 +185,7 @@ class TikTokReporter:
         try:
             response = self.session.get(
                 f"{TIKTOK_BASE_URL}/@{username}",
-                timeout=15
+                timeout=HTTP_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:
@@ -220,7 +254,7 @@ class TikTokReporter:
             response = self.session.post(
                 f"{TIKTOK_API_BASE}/aweme/v2/aweme/feedback/",
                 data=report_data,
-                timeout=30
+                timeout=HTTP_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:
@@ -292,7 +326,7 @@ class TikTokReporter:
             response = self.session.post(
                 f"{TIKTOK_API_BASE}/aweme/v2/aweme/feedback/",
                 data=report_data,
-                timeout=30
+                timeout=HTTP_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:

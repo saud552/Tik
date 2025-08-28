@@ -12,6 +12,12 @@ TIKTOK_BASE_URL = "https://www.tiktok.com"
 TIKTOK_API_BASE = "https://api16-normal-c-alisg.ttapis.com"
 TIKTOK_MOBILE_API = "https://api-h2.tiktokv.com"
 
+# إعدادات الشبكة والمهل والمحاولات
+HTTP_TIMEOUT_SECONDS = int(os.getenv('HTTP_TIMEOUT_SECONDS', 30))
+HTTP_MAX_RETRIES = int(os.getenv('HTTP_MAX_RETRIES', 2))
+HTTP_BACKOFF_FACTOR = float(os.getenv('HTTP_BACKOFF_FACTOR', 0.5))
+HTTP_PROXIES = os.getenv('HTTP_PROXIES', '')  # تنسيق: http://user:pass@host:port;https://user:pass@host:port
+
 # إعدادات Redis
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
