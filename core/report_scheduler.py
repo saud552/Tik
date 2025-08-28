@@ -1,8 +1,6 @@
 import asyncio
-import time
 import random
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 from models.job import ReportJob, ReportType, JobStatus
 from models.account import TikTokAccount
 from core.tiktok_reporter import TikTokReporter
@@ -106,9 +104,11 @@ class ReportScheduler:
                 
                 success = False
                 if job.report_type == ReportType.VIDEO:
-                    success = await self.reporter.report_video(
-                        account, job.target, job.reason
-                    )
+                    video_id, owner_user_id = self.reporter.extract_video_info(job.target)
+                    if not video_id or not owner_user_id:
+                        job.update_progress(account.id, "failed", "فشل في استخراج معلومات الفيديو")
+                        continue
+                    success = await self.reporter.report_video(account, video_id, owner_user_id, job.reason)
                 elif job.report_type == ReportType.ACCOUNT:
                     success = await self.reporter.report_account(
                         account, job.target, job.reason
@@ -129,7 +129,7 @@ class ReportScheduler:
                     ))
             
             # تحديث حالة الحساب
-            await self.account_manager._save_accounts()
+            self.account_manager._save_accounts()
     
     async def stop_job(self, job_id: str) -> bool:
         """إيقاف مهمة محددة"""
@@ -170,7 +170,7 @@ class ReportScheduler:
     
     def get_all_jobs(self) -> List[ReportJob]:
         """الحصول على جميع المهام"""
-        all_jobs = []
+        all_jobs: List[ReportJob] = []
         
         # المهام النشطة
         all_jobs.extend(self.active_jobs.values())

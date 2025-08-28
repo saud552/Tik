@@ -21,16 +21,16 @@ class ReportJob:
     target: str  # رابط الفيديو أو اسم المستخدم
     reason: int  # نوع البلاغ
     reports_per_account: int
-    id: str = None
+    id: Optional[str] = None
     status: JobStatus = JobStatus.PENDING
-    created_at: datetime = None
+    created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     total_reports: int = 0
     successful_reports: int = 0
     failed_reports: int = 0
-    assigned_accounts: List[str] = None
-    progress: Dict[str, Any] = None
+    assigned_accounts: Optional[List[str]] = None
+    progress: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     
     def __post_init__(self):

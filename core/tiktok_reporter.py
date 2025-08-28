@@ -4,8 +4,7 @@ import random
 import re
 import json
 import uuid
-from typing import Optional, Dict, Any, Tuple
-from urllib.parse import urlparse, parse_qs
+from typing import Optional, Dict, Tuple
 from config.settings import TIKTOK_BASE_URL, TIKTOK_API_BASE, HUMAN_DELAYS
 from models.account import TikTokAccount
 
@@ -33,7 +32,7 @@ class TikTokReporter:
             'Upgrade-Insecure-Requests': '1',
         })
     
-    def _simulate_human_delay(self, min_delay: float = None, max_delay: float = None):
+    def _simulate_human_delay(self, min_delay: Optional[float] = None, max_delay: Optional[float] = None):
         """محاكاة تأخير بشري"""
         if min_delay is None:
             min_delay = HUMAN_DELAYS['min_delay']
@@ -169,8 +168,8 @@ class TikTokReporter:
                         # استخراج معرف المستخدم من البيانات
                         user_info = data.get('UserModule', {}).get('users', {}).get(username, {})
                         return user_info.get('id')
-                    except:
-                        pass
+                    except Exception:
+                        return None
             
             return None
             

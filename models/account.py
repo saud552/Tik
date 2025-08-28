@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, Any
-import json
 
 @dataclass
 class TikTokAccount:
@@ -14,7 +13,7 @@ class TikTokAccount:
     success_count: int = 0
     fail_count: int = 0
     last_error: Optional[str] = None
-    created_at: datetime = None
+    created_at: Optional[datetime] = None
     proxy: Optional[str] = None
     
     def __post_init__(self):
