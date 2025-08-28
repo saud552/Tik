@@ -81,6 +81,39 @@ class TikTokKeyboards:
         
         rows.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_target")])
         return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def get_dynamic_categories_menu(categories: list[dict]):
+        """قائمة فئات البلاغات الديناميكية المستخرجة من الويب"""
+        rows: list[list[InlineKeyboardButton]] = []
+        btns = []
+        for cat in categories:
+            title = cat.get('title', 'Category')
+            key = cat.get('key', title)
+            btns.append(InlineKeyboardButton(title, callback_data=f"dyncat_{key}"))
+        rows.extend(TikTokKeyboards._chunk_buttons(btns, per_row=2))
+        rows.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_target")])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def get_dynamic_items_menu(categories: list[dict], category_key: str):
+        """قائمة العناصر (الأسباب) لفئة ديناميكية محددة"""
+        rows: list[list[InlineKeyboardButton]] = []
+        items = []
+        for cat in categories:
+            if cat.get('key') == category_key:
+                items = cat.get('items', [])
+                break
+        btns = []
+        for it in items:
+            title = it.get('title', 'Reason')
+            rid = it.get('id', title)
+            label = title if len(title) <= 34 else (title[:31] + "...")
+            btns.append(InlineKeyboardButton(label, callback_data=f"dynitem_{rid}"))
+        if btns:
+            rows.extend(TikTokKeyboards._chunk_buttons(btns, per_row=2))
+        rows.append([InlineKeyboardButton("🔙 العودة للفئات", callback_data="back_to_categories")])
+        return InlineKeyboardMarkup(rows)
     
     @staticmethod
     def get_category_reasons_menu(category: str, report_type: str = "video"):

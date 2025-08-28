@@ -115,9 +115,12 @@ class ReportScheduler:
                 if proxy_index >= len(proxies_list):
                     proxy_index = 0
                 socks = proxies_list[proxy_index]
-                # تحويل إلى socks5h لتمرير DNS عبر البروكسي عند الحاجة
-                if socks.startswith('socks5://') and not socks.startswith('socks5h://'):
+                # دعم user:pass@host:port وفرض socks5h://
+                if socks.startswith('socks5://'):
                     socks = socks.replace('socks5://', 'socks5h://', 1)
+                elif not socks.startswith('socks5h://') and not socks.startswith('http://') and not socks.startswith('https://'):
+                    # ip:port أو user:pass@host:port
+                    socks = f"socks5h://{socks}"
                 proxy_index += 1
                 self.reporter.session.proxies.update({'http': socks, 'https': socks})
             else:
