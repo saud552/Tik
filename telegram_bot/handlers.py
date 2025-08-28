@@ -475,8 +475,210 @@ class TikTokHandlers:
                     # إطلاق المهمة في الخلفية
                     asyncio.create_task(run_web_only_progress(query.message.chat_id, msg.message_id))
 
+                elif state['report_type'] == ReportType.VIDEO:
+                    # تنفيذ بلاغ الفيديو عبر مسار الويب فقط مع تحديث رسالة التقدم
+                    msg = await query.edit_message_text(
+                        "🚀 بدء عملية بلاغ الفيديو عبر الويب فقط...\n\n"
+                        "سيتم تحديث هذه الرسالة بالتقدم حتى الانتهاء.",
+                        reply_markup=TikTokKeyboards.get_main_menu()
+                    )
+
+                    async def run_video_web_only_progress(chat_id: int, message_id: int):
+                        # استخراج معلومات الفيديو عبر Playwright فقط
+                        async def get_video_info_via_playwright(target_url: str) -> tuple[str | None, str | None]:
+                            # حل الروابط المختصرة إن وُجدت
+                            try:
+                                resolved = self.reporter._resolve_short_url(target_url)
+                            except Exception:
+                                resolved = target_url
+
+                            try:
+                                from playwright.async_api import async_playwright
+                                pw = await async_playwright().start()
+                                browser = await pw.chromium.launch(headless=True)
+                                context_pw = await browser.new_context(
+                                    user_agent=(
+                                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                    )
+                                )
+                                page = await context_pw.new_page()
+                                try:
+                                    await page.goto(resolved, wait_until="networkidle")
+                                    # استخدم الرابط النهائي لاستخراج video_id واسم المستخدم
+                                    final_url = page.url
+                                    vid = None
+                                    user_name = None
+                                    m = re.search(r"/video/(\d+)", final_url)
+                                    if m:
+                                        vid = m.group(1)
+                                    mu = re.search(r"/@([^/]+)/video/", final_url)
+                                    if mu:
+                                        user_name = mu.group(1)
+                                    # كاحتياط، افحص HTML
+                                    if not vid or not user_name:
+                                        html = await page.content()
+                                        if not vid:
+                                            mv = re.search(r'"aweme_id"\s*:\s*"(\d+)"', html)
+                                            if mv:
+                                                vid = mv.group(1)
+                                        if not user_name:
+                                            mu2 = re.search(r'"uniqueId"\s*:\s*"([^"]+)"', html)
+                                            if mu2:
+                                                user_name = mu2.group(1)
+                                    return vid, user_name
+                                finally:
+                                    try:
+                                        await context_pw.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await browser.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await pw.stop()
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                return None, None
+
+                        try:
+                            target_url = state['target']
+                            reason = state['reason']
+                            total = state['reports_per_account']
+                            interval = state.get('interval_seconds', 0) or 0
+                            proxies = state.get('socks5_proxies') or []
+
+                            video_id, username = await get_video_info_via_playwright(target_url)
+                            if not video_id or not username:
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text="❌ تعذر استخراج معلومات الفيديو (video_id/username).")
+                                return
+
+                            # استخراج user_id عبر صفحة المستخدم
+                            async def get_user_id_via_playwright(user: str) -> str | None:
+                                from playwright.async_api import async_playwright
+                                pw = await async_playwright().start()
+                                browser = await pw.chromium.launch(headless=True)
+                                context_pw = await browser.new_context()
+                                page = await context_pw.new_page()
+                                try:
+                                    await page.goto(f"https://www.tiktok.com/@{user}", wait_until="networkidle")
+                                    html = await page.content()
+                                    m = re.search(r'<meta[^>]+content=\"tiktok://user/(\d+)\"', html)
+                                    if m:
+                                        return m.group(1)
+                                    m = re.search(r'\"id\":\"(\d+)\"', html)
+                                    if m:
+                                        return m.group(1)
+                                    m = re.search(r'<script id=\"SIGI_STATE\" type=\"application/json\">(.*?)</script>', html)
+                                    if m:
+                                        j = m.group(1)
+                                        mm = re.search(r'\"id\":\"(\d+)\"', j)
+                                        if mm:
+                                            return mm.group(1)
+                                    return None
+                                finally:
+                                    try:
+                                        await context_pw.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await browser.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await pw.stop()
+                                    except Exception:
+                                        pass
+
+                            owner_user_id = await get_user_id_via_playwright(username)
+                            if not owner_user_id:
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text="❌ تعذر استخراج user_id لصاحب الفيديو.")
+                                return
+
+                            success = 0
+                            failed = 0
+                            proxy_index = 0
+
+                            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                text=(
+                                    "🚀 بدء بلاغ الفيديو عبر الويب فقط\n\n"
+                                    f"🎯 الرابط: {target_url}\n"
+                                    f"📹 video_id: {video_id}\n"
+                                    f"👤 username: @{username}\n"
+                                    f"🆔 user_id: {owner_user_id}\n"
+                                    f"🚨 السبب: {reason}\n"
+                                    f"🔢 العدد: {total}\n"
+                                    f"⏱️ الفاصل: {interval}s\n"
+                                    f"🌐 بروكسيات: {len(proxies)}\n\n"
+                                    f"التقدم: 0/{total}"
+                                )
+                            )
+
+                            for i in range(total):
+                                # تدوير البروكسي إن وجد
+                                if proxies:
+                                    if proxy_index >= len(proxies):
+                                        proxy_index = 0
+                                    socks = proxies[proxy_index]
+                                    if socks.startswith('socks5://') and not socks.startswith('socks5h://'):
+                                        socks = socks.replace('socks5://', 'socks5h://', 1)
+                                    proxy_index += 1
+                                    self.reporter.session.proxies.update({'http': socks, 'https': socks})
+                                else:
+                                    self.reporter.session.proxies.pop('http', None)
+                                    self.reporter.session.proxies.pop('https', None)
+
+                                ok = await self.reporter._report_video_web(video_id, owner_user_id, reason)
+                                if ok:
+                                    success += 1
+                                else:
+                                    failed += 1
+
+                                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text=(
+                                        "🚀 بلاغ الفيديو عبر الويب فقط (جارٍ)\n\n"
+                                        f"🎯 الرابط: {target_url}\n"
+                                        f"📹 video_id: {video_id}\n"
+                                        f"👤 username: @{username}\n"
+                                        f"🆔 user_id: {owner_user_id}\n"
+                                        f"🚨 السبب: {reason}\n"
+                                        f"🔢 العدد: {total}\n"
+                                        f"⏱️ الفاصل: {interval}s\n"
+                                        f"🌐 بروكسيات: {len(proxies)}\n\n"
+                                        f"التقدم: {success + failed}/{total} | ✅ {success} | ❌ {failed}"
+                                    )
+                                )
+
+                                if i < total - 1 and interval > 0:
+                                    await asyncio.sleep(interval)
+
+                            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                text=(
+                                    "🎉 اكتملت عملية بلاغ الفيديو عبر الويب فقط\n\n"
+                                    f"🎯 الرابط: {target_url}\n"
+                                    f"📹 video_id: {video_id}\n"
+                                    f"👤 username: @{username}\n"
+                                    f"🆔 user_id: {owner_user_id}\n"
+                                    f"🚨 السبب: {reason}\n"
+                                    f"🔢 العدد: {total}\n"
+                                    f"⏱️ الفاصل: {interval}s\n"
+                                    f"🌐 بروكسيات: {len(proxies)}\n\n"
+                                    f"النتيجة النهائية: ✅ {success} | ❌ {failed}"
+                                )
+                            )
+
+                        except Exception as e:
+                            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                text=f"❌ خطأ أثناء تنفيذ بلاغ الفيديو: {e}")
+
+                    asyncio.create_task(run_video_web_only_progress(query.message.chat_id, msg.message_id))
+
                 else:
-                    # إنشاء مهمة البلاغ الافتراضية للفيديو (المسار القائم)
+                    # fallback لأي أنواع أخرى مستقبلية
                     job_id = await self.scheduler.queue_job(
                         report_type=state['report_type'],
                         target=state['target'],
