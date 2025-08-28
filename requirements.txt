@@ -4,3 +4,11 @@ requests==2.31.0
 python-dotenv==1.0.0
 cryptography==41.0.7
 PySocks==1.7.1
+
+# مكتبات جديدة للتحسينات
+aiohttp>=3.9.0
+aiohttp-socks>=0.8.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+fake-useragent>=1.4.0
+python-socks>=2.4.0

@@ -119,18 +119,23 @@ class TikTokHandlers:
         return WAITING_FOR_REASON
     
     async def handle_reason_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """معالجة اختيار نوع البلاغ"""
+        """معالجة اختيار نوع البلاغ مع دعم الفئات"""
         query = update.callback_query
         if not query:
             return ConversationHandler.END
         await query.answer()
         
+        user_id = query.from_user.id
+        if user_id not in self.user_states:
+            await query.edit_message_text("❌ جلسة منتهية. يرجى البدء من جديد.")
+            return ConversationHandler.END
+        
         if query.data.startswith("reason_"):
+            # اختيار نوع بلاغ محدد
             reason_id = int(query.data.split("_")[1])
-            user_id = query.from_user.id
             self.user_states[user_id]['reason'] = reason_id
             
-            reason_text = list(REPORT_REASONS.values())[reason_id - 1]
+            reason_text = REPORT_REASONS[reason_id]
             await query.edit_message_text(
                 f"✅ تم اختيار نوع البلاغ: {reason_text}\n\n"
                 "الآن اختر عدد البلاغات المراد تنفيذها من كل حساب:",
@@ -138,12 +143,49 @@ class TikTokHandlers:
             )
             
             return WAITING_FOR_REPORTS_COUNT
-        elif query.data == "back_to_target":
-            user_id = query.from_user.id
-            del self.user_states[user_id]
+            
+        elif query.data.startswith("category_"):
+            # اختيار فئة بلاغات
+            category = query.data.split("_")[1]
+            report_type = self.user_states[user_id]['report_type']
+            
             await query.edit_message_text(
-                "📝 الإبلاغ عن فيديو\n\n"
-                "أدخل رابط الفيديو:",
+                f"📂 اختر نوع البلاغ من فئة '{category}':",
+                reply_markup=TikTokKeyboards.get_category_reasons_menu(category, report_type.value)
+            )
+            
+            return WAITING_FOR_REASON
+            
+        elif query.data == "show_all_reasons":
+            # عرض جميع أنواع البلاغات
+            report_type = self.user_states[user_id]['report_type']
+            
+            await query.edit_message_text(
+                "📋 جميع أنواع البلاغات المتاحة:",
+                reply_markup=TikTokKeyboards.get_all_reasons_menu(report_type.value)
+            )
+            
+            return WAITING_FOR_REASON
+            
+        elif query.data == "back_to_categories":
+            # العودة إلى قائمة الفئات
+            report_type = self.user_states[user_id]['report_type']
+            
+            await query.edit_message_text(
+                "📂 اختر فئة البلاغ:",
+                reply_markup=TikTokKeyboards.get_report_reasons_menu(report_type.value)
+            )
+            
+            return WAITING_FOR_REASON
+            
+        elif query.data == "back_to_target":
+            # العودة إلى إدخال الهدف
+            del self.user_states[user_id]
+            report_type_text = "فيديو" if self.user_states.get(user_id, {}).get('report_type') == ReportType.VIDEO else "حساب"
+            
+            await query.edit_message_text(
+                f"📝 الإبلاغ عن {report_type_text}\n\n"
+                f"أدخل رابط {report_type_text} أو اسم المستخدم:",
                 reply_markup=TikTokKeyboards.get_cancel_keyboard()
             )
             return WAITING_FOR_TARGET
@@ -243,32 +285,117 @@ class TikTokHandlers:
             await update.message.reply_text("❌ جلسة منتهية. يرجى البدء من جديد.")
             return ConversationHandler.END
 
-        proxies: list[str] = []
-        if text.lower() != "تخطي":
-            candidates = [line.strip() for line in text.splitlines() if line.strip()]
-            # فلترة الصيغة ip:port
-            for c in candidates:
-                if ':' in c:
-                    host, port = c.split(':', 1)
-                    if host and port.isdigit():
-                        proxies.append(c)
+        if text.lower() == "تخطي":
+            # تخطي البروكسيات
+            self.user_states[user_id]['socks5_proxies'] = []
+            await self._show_final_summary(update.message, user_id)
+            return WAITING_FOR_CONFIRMATION
 
-        # اختبار البروكسيات بشكل مبسط عبر محاولة إنشاء URL socks5
+        # استخراج البروكسيات من النص
+        proxy_candidates = [line.strip() for line in text.splitlines() if line.strip()]
+        
+        if not proxy_candidates:
+            await update.message.reply_text(
+                "❌ لم يتم العثور على بروكسيات صحيحة.\n"
+                "يرجى إدخال البروكسيات بصيغة ip:port أو إرسال 'تخطي'",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
+            )
+            return WAITING_FOR_PROXIES
+
+        # اختبار البروكسيات
+        await update.message.reply_text(
+            "🔍 جاري اختبار البروكسيات...\n"
+            "قد يستغرق هذا بضع دقائق...",
+            reply_markup=TikTokKeyboards.get_cancel_keyboard()
+        )
+
+        try:
+            # استيراد نظام اختبار البروكسيات
+            from utils.proxy_tester import test_proxies
+            
+            # اختبار البروكسيات
+            working_proxies, proxy_stats = await test_proxies(proxy_candidates)
+            
+            # حفظ البروكسيات العاملة
+            self.user_states[user_id]['socks5_proxies'] = working_proxies
+            
+            # عرض نتائج الاختبار
+            test_result = (
+                f"🧩 نتائج اختبار البروكسيات:\n\n"
+                f"📊 الإجمالي: {proxy_stats['total']}\n"
+                f"✅ العاملة: {proxy_stats['working']}\n"
+                f"❌ الفاشلة: {proxy_stats['failed']}\n"
+                f"📈 معدل النجاح: {proxy_stats['success_rate']:.1f}%\n"
+                f"⏱️ متوسط الاستجابة: {proxy_stats['avg_response_time']:.2f}s\n\n"
+            )
+            
+            if working_proxies:
+                test_result += f"✅ البروكسيات العاملة: {len(working_proxies)}\n"
+                for i, proxy in enumerate(working_proxies[:5], 1):  # عرض أول 5 فقط
+                    test_result += f"   {i}. {proxy}\n"
+                if len(working_proxies) > 5:
+                    test_result += f"   ... و {len(working_proxies) - 5} أخرى\n"
+            else:
+                test_result += "⚠️ لم يتم العثور على بروكسيات عاملة\n"
+            
+            await update.message.reply_text(test_result)
+            
+            # الانتقال إلى الملخص النهائي
+            await self._show_final_summary(update.message, user_id)
+            return WAITING_FOR_CONFIRMATION
+            
+        except ImportError:
+            # إذا لم يتم تثبيت المكتبات الجديدة، استخدم الطريقة القديمة
+            await self._fallback_proxy_testing(update.message, user_id, proxy_candidates)
+            return WAITING_FOR_CONFIRMATION
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ خطأ في اختبار البروكسيات: {str(e)}\n"
+                "سيتم المتابعة بدون بروكسيات",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
+            )
+            self.user_states[user_id]['socks5_proxies'] = []
+            await self._show_final_summary(update.message, user_id)
+            return WAITING_FOR_CONFIRMATION
+    
+    async def _fallback_proxy_testing(self, message, user_id: int, proxy_candidates: list):
+        """اختبار البروكسيات بالطريقة القديمة (احتياطية)"""
+        proxies: list[str] = []
+        
+        # فلترة الصيغة ip:port
+        for candidate in proxy_candidates:
+            if ':' in candidate:
+                host, port = candidate.split(':', 1)
+                if host and port.isdigit():
+                    proxies.append(candidate)
+
+        # اختبار البروكسيات بشكل مبسط
         valid_proxies: list[str] = []
-        for pp in proxies:
-            host, port = pp.split(':', 1)
+        for proxy in proxies:
+            host, port = proxy.split(':', 1)
             if host and port.isdigit():
                 valid_proxies.append(f"socks5://{host}:{port}")
 
         # حفظ البروكسيات الفعالة في الحالة
         self.user_states[user_id]['socks5_proxies'] = valid_proxies
 
+        await message.reply_text(
+            f"🧩 تم اختبار البروكسيات بالطريقة الاحتياطية:\n"
+            f"✅ البروكسيات الصحيحة: {len(valid_proxies)}/{len(proxy_candidates)}",
+            reply_markup=TikTokKeyboards.get_cancel_keyboard()
+        )
+        
         # عرض الملخص النهائي
+        await self._show_final_summary(message, user_id)
+    
+    async def _show_final_summary(self, message, user_id: int):
+        """عرض الملخص النهائي للمهمة"""
         state = self.user_states[user_id]
         report_type_text = "فيديو" if state['report_type'] == ReportType.VIDEO else "حساب"
         reason_text = REPORT_REASONS[state['reason']]
         healthy_accounts = self.account_manager.get_healthy_accounts()
         total_reports = len(healthy_accounts) * state['reports_per_account']
+        
         summary_text = (
             f"📋 ملخص المهمة:\n\n"
             f"🎯 الهدف: {state['target']}\n"
@@ -277,14 +404,14 @@ class TikTokHandlers:
             f"📊 عدد البلاغات لكل حساب: {state['reports_per_account']}\n"
             f"👥 عدد الحسابات المتاحة: {len(healthy_accounts)}\n"
             f"🔢 إجمالي البلاغات: {total_reports}\n"
-            f"🌐 بروكسيات مفعلة: {len(valid_proxies)}\n\n"
+            f"🌐 بروكسيات مفعلة: {len(state.get('socks5_proxies', []))}\n\n"
             f"هل تريد تأكيد بدء عملية البلاغ؟"
         )
-        await update.message.reply_text(
+        
+        await message.reply_text(
             summary_text,
             reply_markup=TikTokKeyboards.get_confirmation_menu()
         )
-        return WAITING_FOR_CONFIRMATION
     
     async def show_job_status(self, query):
         """عرض حالة المهام"""
