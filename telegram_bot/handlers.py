@@ -118,14 +118,34 @@ class TikTokHandlers:
         return WAITING_FOR_TARGET
 
     async def admin_refresh_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تحديث قسري لمخطط الفئات وتفريغ الكاش"""
+        """تحديث قسري لمخطط الفئات وتفريغ الكاش مع دعم تمرير رابط فيديو أو @username."""
         user = update.effective_user
         if not user or (user.id not in set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))):
             return
+        args = []
+        try:
+            # python-telegram-bot يوفر context.args مع CommandHandler
+            args = getattr(context, 'args', None) or []
+        except Exception:
+            args = []
+
+        target_video_url = None
+        target_account_url = None
+        if args:
+            arg = " ".join(args).strip()
+            if arg.startswith("http"):
+                # اعتبره رابط فيديو/محتوى
+                target_video_url = arg
+            else:
+                # اعتبره اسم مستخدم
+                username = arg[1:] if arg.startswith("@") else arg
+                if username:
+                    target_account_url = f"https://www.tiktok.com/@{username}"
+
         await update.message.reply_text("🔄 جاري تحديث مخطط البلاغات...")
         try:
-            v = await refresh_report_schema('video')
-            a = await refresh_report_schema('account')
+            v = await refresh_report_schema('video', target_video_url)
+            a = await refresh_report_schema('account', target_account_url)
             await update.message.reply_text(
                 "✅ تم التحديث.\n"
                 f"video: source={v.source}, cats={len(v.categories)}\n"
@@ -135,7 +155,7 @@ class TikTokHandlers:
             await update.message.reply_text(f"❌ فشل التحديث: {e}")
 
     async def admin_show_schema(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """عرض موجز عن المخطط الحالي من الكاش"""
+        """عرض موجز عن المخطط الحالي من الكاش مع تعداد أدق للعناصر."""
         user = update.effective_user
         if not user or (user.id not in set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))):
             return
@@ -144,10 +164,11 @@ class TikTokHandlers:
             a = await fetch_report_schema('account')
             def summarize(schema):
                 parts = []
-                for c in (schema.categories or [])[:5]:
+                for c in (schema.categories or []):
                     items = c.get('items', [])
-                    parts.append(f"- {c.get('title')}: {min(len(items), 5)} عناصر")
-                return "\n".join(parts)
+                    title = c.get('title', 'Category')
+                    parts.append(f"- {title}: {len(items)} عنصر")
+                return "\n".join(parts) if parts else "(لا توجد فئات)"
             await update.message.reply_text(
                 "📋 المخطط الحالي:\n"
                 f"video (source={v.source}, cats={len(v.categories)}):\n{summarize(v)}\n\n"
