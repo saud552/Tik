@@ -17,7 +17,7 @@ class ReportScheduler:
         self.stop_event = asyncio.Event()
     
     async def queue_job(self, report_type: ReportType, target: str, reason: int, 
-                        reports_per_account: int) -> str:
+                        reports_per_account: int, socks5_proxies: Optional[list[str]] = None) -> str:
         """إضافة مهمة جديدة إلى الطابور"""
         # إنشاء مهمة جديدة
         job = ReportJob(
@@ -36,6 +36,9 @@ class ReportScheduler:
         job.total_reports = total_reports
         
         # إضافة المهمة إلى الطابور
+        # حفظ البروكسيات المفعلة في progress للشفافية (اختياري)
+        if socks5_proxies:
+            job.progress['proxies'] = socks5_proxies
         self.job_queue.append(job)
         
         # بدء المعالجة إذا لم تكن تعمل

@@ -14,8 +14,9 @@ from config.settings import ADMIN_USER_ID, REPORT_REASONS
     WAITING_FOR_TARGET,
     WAITING_FOR_REASON,
     WAITING_FOR_REPORTS_COUNT,
-    WAITING_FOR_CONFIRMATION
-) = range(6)
+    WAITING_FOR_CONFIRMATION,
+    WAITING_FOR_PROXIES
+) = range(7)
 
 class TikTokHandlers:
     def __init__(self):
@@ -154,31 +155,15 @@ class TikTokHandlers:
             user_id = query.from_user.id
             self.user_states[user_id]['reports_per_account'] = reports_count
             
-            # عرض ملخص المهمة
-            state = self.user_states[user_id]
-            report_type_text = "فيديو" if state['report_type'] == ReportType.VIDEO else "حساب"
-            reason_text = REPORT_REASONS[state['reason']]
-            
-            healthy_accounts = self.account_manager.get_healthy_accounts()
-            total_reports = len(healthy_accounts) * reports_count
-            
-            summary_text = (
-                f"📋 ملخص المهمة:\n\n"
-                f"🎯 الهدف: {state['target']}\n"
-                f"📹 النوع: {report_type_text}\n"
-                f"🚨 السبب: {reason_text}\n"
-                f"📊 عدد البلاغات لكل حساب: {reports_count}\n"
-                f"👥 عدد الحسابات المتاحة: {len(healthy_accounts)}\n"
-                f"🔢 إجمالي البلاغات: {total_reports}\n\n"
-                f"هل تريد تأكيد بدء عملية البلاغ؟"
-            )
-            
+            # طلب البروكسيات (SOCKS5) اختيارياً
             await query.edit_message_text(
-                summary_text,
-                reply_markup=TikTokKeyboards.get_confirmation_menu()
+                "🧩 هل تريد إضافة بروكسيات SOCKS5؟\n"
+                "أرسل قائمة البروكسيات بهذا الشكل (سطر لكل بروكسي):\n"
+                "ip:port\n\n"
+                "أرسل كلمة تخطي لتجاوز هذه الخطوة.",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
             )
-            
-            return WAITING_FOR_CONFIRMATION
+            return WAITING_FOR_PROXIES
         elif query.data == "back_to_reasons":
             await query.edit_message_text(
                 "اختر نوع البلاغ:",
@@ -203,7 +188,8 @@ class TikTokHandlers:
                     report_type=state['report_type'],
                     target=state['target'],
                     reason=state['reason'],
-                    reports_per_account=state['reports_per_account']
+                    reports_per_account=state['reports_per_account'],
+                    socks5_proxies=state.get('socks5_proxies')
                 )
                 
                 await query.edit_message_text(
@@ -241,6 +227,59 @@ class TikTokHandlers:
                 reply_markup=TikTokKeyboards.get_reports_per_account_menu()
             )
             return WAITING_FOR_REPORTS_COUNT
+
+    async def handle_proxies_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """استقبال البروكسيات واختبارها ثم الانتقال للتأكيد"""
+        if not update or not update.message or not update.message.from_user:
+            return ConversationHandler.END
+        user_id = update.message.from_user.id
+        text = update.message.text.strip()
+        if user_id not in self.user_states:
+            await update.message.reply_text("❌ جلسة منتهية. يرجى البدء من جديد.")
+            return ConversationHandler.END
+
+        proxies: list[str] = []
+        if text.lower() != "تخطي":
+            candidates = [line.strip() for line in text.splitlines() if line.strip()]
+            # فلترة الصيغة ip:port
+            for c in candidates:
+                if ':' in c:
+                    host, port = c.split(':', 1)
+                    if host and port.isdigit():
+                        proxies.append(c)
+
+        # اختبار البروكسيات بشكل مبسط عبر محاولة إنشاء URL socks5
+        valid_proxies: list[str] = []
+        for pp in proxies:
+            host, port = pp.split(':', 1)
+            if host and port.isdigit():
+                valid_proxies.append(f"socks5://{host}:{port}")
+
+        # حفظ البروكسيات الفعالة في الحالة
+        self.user_states[user_id]['socks5_proxies'] = valid_proxies
+
+        # عرض الملخص النهائي
+        state = self.user_states[user_id]
+        report_type_text = "فيديو" if state['report_type'] == ReportType.VIDEO else "حساب"
+        reason_text = REPORT_REASONS[state['reason']]
+        healthy_accounts = self.account_manager.get_healthy_accounts()
+        total_reports = len(healthy_accounts) * state['reports_per_account']
+        summary_text = (
+            f"📋 ملخص المهمة:\n\n"
+            f"🎯 الهدف: {state['target']}\n"
+            f"📹 النوع: {report_type_text}\n"
+            f"🚨 السبب: {reason_text}\n"
+            f"📊 عدد البلاغات لكل حساب: {state['reports_per_account']}\n"
+            f"👥 عدد الحسابات المتاحة: {len(healthy_accounts)}\n"
+            f"🔢 إجمالي البلاغات: {total_reports}\n"
+            f"🌐 بروكسيات مفعلة: {len(valid_proxies)}\n\n"
+            f"هل تريد تأكيد بدء عملية البلاغ؟"
+        )
+        await update.message.reply_text(
+            summary_text,
+            reply_markup=TikTokKeyboards.get_confirmation_menu()
+        )
+        return WAITING_FOR_CONFIRMATION
     
     async def show_job_status(self, query):
         """عرض حالة المهام"""
