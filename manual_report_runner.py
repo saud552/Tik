@@ -17,6 +17,7 @@ from typing import Optional
 
 from core.account_manager import TikTokAccountManager
 from core.report_scheduler import ReportScheduler
+from utils.proxy_tester import test_proxies
 from models.job import ReportType, ReportJob, JobStatus
 
 
@@ -24,10 +25,27 @@ async def run_account_report(
     target_username: str,
     reason_code: int,
     reports_per_account: int = 1,
+    candidate_proxies_path: str | None = None,
 ) -> Optional[ReportJob]:
     """يشغّل مهمة بلاغ حساب ويعيد المهمة المكتملة عند الانتهاء إن وُجدت."""
     account_manager = TikTokAccountManager("accounts.json")
     scheduler = ReportScheduler(account_manager)
+
+    # اختبار البروكسيات إن وُجدت قائمة
+    socks5_proxies: list[str] | None = None
+    if candidate_proxies_path:
+        try:
+            with open(candidate_proxies_path, 'r', encoding='utf-8') as f:
+                candidates = [line.strip() for line in f if line.strip()]
+            if candidates:
+                working, stats = await test_proxies(candidates)
+                socks5_proxies = working
+                print("🧩 Proxy stats:", stats)
+                if not socks5_proxies:
+                    print("⚠️ لا توجد بروكسيات عاملة ضمن القائمة.")
+        except Exception as e:
+            print(f"⚠️ فشل اختبار البروكسيات: {e}")
+            socks5_proxies = None
 
     # جدولة المهمة
     job_id = await scheduler.queue_job(
@@ -35,7 +53,7 @@ async def run_account_report(
         target=target_username,
         reason=reason_code,
         reports_per_account=reports_per_account,
-        socks5_proxies=None,
+        socks5_proxies=socks5_proxies,
     )
 
     # الانتظار حتى انتهاء المعالجة مع التحقق من اكتمال المهمة
@@ -75,6 +93,7 @@ async def main():
         target_username=target_url_or_username,
         reason_code=reason_code,
         reports_per_account=reports_per_account,
+        candidate_proxies_path="proxies.txt",
     )
 
     if not job:
