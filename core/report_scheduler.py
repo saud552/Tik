@@ -40,6 +40,7 @@ class ReportScheduler:
         if socks5_proxies:
             job.progress['proxies'] = socks5_proxies
         self.job_queue.append(job)
+        print(f"[Scheduler] Queued job {job.id} type={report_type.value} target={target} reason={reason} total={total_reports}")
         
         # بدء المعالجة إذا لم تكن تعمل
         if not self.is_running:
@@ -62,6 +63,7 @@ class ReportScheduler:
         try:
             # بدء المهمة
             job.start()
+            print(f"[Scheduler] Started job {job.id}")
             self.active_jobs[job.id] = job
             
             # الحصول على الحسابات السليمة
@@ -76,11 +78,14 @@ class ReportScheduler:
             # إكمال المهمة
             if job.successful_reports > 0:
                 job.complete()
+                print(f"[Scheduler] Completed job {job.id} success={job.successful_reports} failed={job.failed_reports}")
             else:
                 job.fail("لم يتم إرسال أي بلاغ بنجاح")
+                print(f"[Scheduler] Failed job {job.id} success={job.successful_reports} failed={job.failed_reports}")
                 
         except Exception as e:
             job.fail(f"خطأ في تنفيذ المهمة: {e}")
+            print(f"[Scheduler] Error in job {job.id}: {e}")
         finally:
             # إزالة المهمة من المهام النشطة
             if job.id in self.active_jobs:

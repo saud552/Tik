@@ -71,7 +71,14 @@ class TikTokHandlers:
         query = update.callback_query
         user_id = query.from_user.id
         data = query.data or ""
-        report_type = ReportType.VIDEO if data == "report_video" else ReportType.ACCOUNT
+        # تحديد نوع البلاغ بدقة من زر القائمة
+        if data == "report_video":
+            report_type = ReportType.VIDEO
+        elif data == "report_account":
+            report_type = ReportType.ACCOUNT
+        else:
+            # fallback آمن
+            report_type = ReportType.VIDEO
         self.user_states[user_id] = {
             'report_type': report_type,
             'target': None,
