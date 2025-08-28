@@ -24,6 +24,7 @@ from config.settings import (
 )
 from models.account import TikTokAccount
 from core.web_login_automator import TikTokWebLoginAutomator
+from utils.metrics_logger import incr
 
 class TikTokReporter:
     def __init__(self, account_manager=None):
@@ -642,6 +643,10 @@ class TikTokReporter:
                 success = await self._report_video_mobile(video_id, user_id, reason, device_info)
                 if success:
                     print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Mobile API")
+                    try:
+                        incr("video_success", 1)
+                    except Exception:
+                        pass
                     account.mark_success()
                     return True
             except Exception as e:
@@ -653,6 +658,10 @@ class TikTokReporter:
                     success = await self._report_video_web(video_id, user_id, reason)
                     if success:
                         print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Web API")
+                        try:
+                            incr("video_success", 1)
+                        except Exception:
+                            pass
                         account.mark_success()
                         return True
                 except Exception as e:
@@ -660,6 +669,10 @@ class TikTokReporter:
             
             if not success:
                 error_msg = "فشل في جميع محاولات الإبلاغ"
+                try:
+                    incr("video_fail", 1)
+                except Exception:
+                    pass
                 account.mark_failure(error_msg)
                 print(f"❌ {error_msg}")
                 return False
@@ -823,6 +836,10 @@ class TikTokReporter:
                 success = await self._report_account_mobile(target_user_id, reason, device_info)
                 if success:
                     print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Mobile API")
+                    try:
+                        incr("account_success", 1)
+                    except Exception:
+                        pass
                     account.mark_success()
                     return True
             except Exception as e:
@@ -834,6 +851,10 @@ class TikTokReporter:
                     success = await self._report_account_web(target_user_id, reason)
                     if success:
                         print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Web API")
+                        try:
+                            incr("account_success", 1)
+                        except Exception:
+                            pass
                         account.mark_success()
                         return True
                 except Exception as e:
@@ -841,6 +862,10 @@ class TikTokReporter:
             
             if not success:
                 error_msg = "فشل في جميع محاولات الإبلاغ"
+                try:
+                    incr("account_fail", 1)
+                except Exception:
+                    pass
                 account.mark_failure(error_msg)
                 print(f"❌ {error_msg}")
                 return False
