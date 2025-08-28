@@ -145,7 +145,7 @@ class TikTokBot:
         
         try:
             # إضافة الحساب
-            account_id = await self.handlers.account_manager.add_account(username, password)
+            account_id = self.handlers.account_manager.add_account(username, password)
             
             await update.message.reply_text(
                 f"✅ تم إضافة الحساب بنجاح!\n\n"
