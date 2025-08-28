@@ -18,43 +18,85 @@ class TikTokWebLoginAutomator:
 		page = None
 		try:
 			launch_args = {"headless": self.headless}
+			# تمرير البروكسي إن وُجد (Playwright يدعم http/socks5)
 			if proxy:
 				launch_args["proxy"] = {"server": proxy}
 			browser = await playwright.chromium.launch(**launch_args)
-			context = await browser.new_context()
+			# إعدادات سياق أقرب إلى متصفح حقيقي
+			context = await browser.new_context(
+				user_agent=(
+					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+					"(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+				),
+				locale="en-US",
+				timezone_id="UTC",
+				viewport={"width": 1366, "height": 850},
+			)
 			page = await context.new_page()
 
-			# الانتقال إلى صفحة تسجيل الدخول
-			await page.goto("https://www.tiktok.com/login", wait_until="load")
+			# الانتقال إلى الصفحة الرئيسية أولاً لقبول ملف تعريف الارتباط إن وُجد
+			await page.goto("https://www.tiktok.com/", wait_until="load")
+			# قبول سياسة الكوكيز إن ظهرت
+			for selector in [
+				"button:has-text('Accept all')",
+				"text=Accept all",
+				"[data-e2e='cookies-banner-accept']",
+			]:
+				try:
+					await page.click(selector, timeout=3000)
+					break
+				except Exception:
+					pass
 
-			# قد يعرض تيك توك عدة مزودين لتسجيل الدخول، نحاول حقل اسم المستخدم/كلمة المرور إن وُجد
-			# ملاحظة: محددات العناصر قد تتغير مع الزمن؛ نستخدم محددات عامة وننتظر ظهورها
-			# محاولة النقر على تبويب "Use phone / email / username" إذا ظهر
-			try:
-				await page.click("text=Use phone / email / username", timeout=5000)
-			except Exception:
-				pass
+			# الانتقال مباشرة إلى نموذج البريد/اسم المستخدم
+			await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="networkidle")
 
-			# اختيار تبويب "Email / Username" إن وُجد
-			try:
-				await page.click("text=Email / Username", timeout=5000)
-			except Exception:
-				pass
+			# محاولات متعددة لملء الحقول على الصفحة أو داخل iframes
+			selectors_user = ["input[name='username']", "input[name='email']", "input[type='text']"]
+			selectors_pass = ["input[name='password']", "input[type='password']"]
+			selectors_submit = ["button[type='submit']", "button:has-text('Log in')"]
 
-			# تعبئة الحقول
-			await page.fill("input[name='username'], input[type='text']", username, timeout=15000)
-			await page.fill("input[name='password'], input[type='password']", password, timeout=15000)
+			async def try_fill_in(target_page):
+				for su in selectors_user:
+					try:
+						await target_page.fill(su, username, timeout=3000)
+						break
+					except Exception:
+						continue
+				for sp in selectors_pass:
+					try:
+						await target_page.fill(sp, password, timeout=3000)
+						break
+					except Exception:
+						continue
+				for sb in selectors_submit:
+					try:
+						await target_page.click(sb, timeout=3000)
+						return True
+					except Exception:
+						continue
+				# محاولة إرسال Enter
+				try:
+					await target_page.keyboard.press("Enter")
+					return True
+				except Exception:
+					return False
 
-			# النقر على زر تسجيل الدخول
-			# أزرار محتملة: "Log in" أو زر ضمن form
-			try:
-				await page.click("button:has-text('Log in')", timeout=10000)
-			except Exception:
-				# محاولة إرسال النموذج عبر Enter
-				await page.keyboard.press("Enter")
+			ok = await try_fill_in(page)
+			if not ok:
+				# تجربة البحث داخل أي إطار
+				for fr in page.frames:
+					try:
+						ok = await try_fill_in(fr)
+						if ok:
+							break
+					except Exception:
+						pass
 
 			# الانتظار لإتمام التحويل أو ظهور الصفحة الرئيسية
 			await page.wait_for_load_state("networkidle")
+			# مهلة قصيرة لالتقاط الكوكيز بعد المصادقة
+			await page.wait_for_timeout(2000)
 
 			# جلب الكوكيز من السياق
 			all_cookies = await context.cookies()
