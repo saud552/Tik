@@ -79,13 +79,21 @@ class TikTokBot:
         )
         self.application.add_handler(report_handler)
         
-        # معالج القوائم الرئيسية
-        main_menu_handler = CallbackQueryHandler(self.handlers.main_menu_callback)
+        # معالج القوائم الرئيسية (تقييد النمط لمنع اعتراض أزرار أخرى)
+        main_menu_handler = CallbackQueryHandler(
+            self.handlers.main_menu_callback,
+            pattern='^(manage_accounts|report_video|report_account|job_status|statistics|main_menu)$'
+        )
         self.application.add_handler(main_menu_handler)
         
         # معالج إدارة الحسابات
         self.application.add_handler(
             CallbackQueryHandler(self.handle_account_management, pattern='^(check_accounts|delete_account)$')
+        )
+
+        # تأكيد حذف حساب محدد
+        self.application.add_handler(
+            CallbackQueryHandler(self.handle_delete_account_confirm, pattern='^delete_')
         )
         
         # معالج التحكم بالمهام
@@ -180,6 +188,29 @@ class TikTokBot:
             await self.show_accounts_status(query)
         elif query.data == "delete_account":
             await self.show_delete_account_menu(query)
+
+    async def handle_delete_account_confirm(self, update, context):
+        """حذف الحساب المختار من القائمة"""
+        query = update.callback_query
+        await query.answer()
+        try:
+            account_id = query.data.split('delete_')[1]
+            success = self.handlers.account_manager.remove_account(account_id)
+            if success:
+                await query.edit_message_text(
+                    "✅ تم حذف الحساب بنجاح.",
+                    reply_markup=TikTokKeyboards.get_account_management_menu()
+                )
+            else:
+                await query.edit_message_text(
+                    "❌ لم يتم العثور على الحساب أو فشل الحذف.",
+                    reply_markup=TikTokKeyboards.get_account_management_menu()
+                )
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ حدث خطأ أثناء الحذف: {e}",
+                reply_markup=TikTokKeyboards.get_account_management_menu()
+            )
     
     async def show_accounts_status(self, query):
         """عرض حالة الحسابات"""
