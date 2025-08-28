@@ -3,6 +3,19 @@ from config.settings import REPORT_REASONS, REPORT_CATEGORIES
 
 class TikTokKeyboards:
     @staticmethod
+    def _chunk_buttons(buttons, per_row: int = 2):
+        """تقسيم الأزرار لصفوف متساوية"""
+        chunked = []
+        row = []
+        for btn in buttons:
+            row.append(btn)
+            if len(row) == per_row:
+                chunked.append(row)
+                row = []
+        if row:
+            chunked.append(row)
+        return chunked
+    @staticmethod
     def get_main_menu():
         """القائمة الرئيسية"""
         keyboard = [
@@ -29,120 +42,86 @@ class TikTokKeyboards:
     def get_report_reasons_menu(report_type="video"):
         """قائمة أنواع البلاغات مع فئات منظمة"""
         keyboard = []
+        rows: list[list[InlineKeyboardButton]] = []
         
-        if report_type == "video":
-            # فئات بلاغات الفيديو
-            categories = REPORT_CATEGORIES.get('video', {})
-            
-            # إضافة الفئات الرئيسية
-            for category_name, reason_ids in categories.items():
-                if reason_ids:
-                    # ترجمة أسماء الفئات
-                    category_labels = {
-                        'sexual': '🔞 محتوى جنسي',
-                        'violent': '⚔️ عنف وإيذاء',
-                        'harassment': '🚫 تحرش وإساءة',
-                        'misinformation': '❌ معلومات خاطئة',
-                        'impersonation': '👤 انتحال شخصية',
-                        'copyright': '📜 حقوق الملكية',
-                        'discrimination': '🚷 تمييز وعنصرية',
-                        'commercial': '💰 محتوى تجاري',
-                        'other': '📝 أخرى'
-                    }
-                    
-                    category_label = category_labels.get(category_name, category_name.title())
-                    keyboard.append([InlineKeyboardButton(
-                        category_label, 
-                        callback_data=f"category_{category_name}"
-                    )])
-            
-            # إضافة زر "عرض الكل"
-            keyboard.append([InlineKeyboardButton("📋 عرض جميع الأنواع", callback_data="show_all_reasons")])
-            
-        else:
-            # فئات بلاغات الحسابات
-            categories = REPORT_CATEGORIES.get('account', {})
-            
-            for category_name, reason_ids in categories.items():
-                if reason_ids:
-                    category_labels = {
-                        'spam': '📧 رسائل مزعجة',
-                        'fake': '🎭 حسابات مزيفة',
-                        'harmful': '🚫 محتوى ضار',
-                        'inappropriate': '⚠️ محتوى غير مناسب',
-                        'other': '📝 أخرى'
-                    }
-                    
-                    category_label = category_labels.get(category_name, category_name.title())
-                    keyboard.append([InlineKeyboardButton(
-                        category_label, 
-                        callback_data=f"category_{category_name}"
-                    )])
-            
-            keyboard.append([InlineKeyboardButton("📋 عرض جميع الأنواع", callback_data="show_all_reasons")])
+        # اختيار قواميس الفئات
+        categories = REPORT_CATEGORIES.get('video' if report_type == "video" else 'account', {})
+        # ترجمات الفئات
+        category_labels_video = {
+            'sexual': '🔞 محتوى جنسي',
+            'violent': '⚔️ عنف وإيذاء',
+            'harassment': '🚫 تحرش وإساءة',
+            'misinformation': '❌ معلومات خاطئة',
+            'impersonation': '👤 انتحال شخصية',
+            'copyright': '📜 حقوق الملكية',
+            'discrimination': '🚷 تمييز وعنصرية',
+            'commercial': '💰 محتوى تجاري',
+            'other': '📝 أخرى'
+        }
+        category_labels_account = {
+            'spam': '📧 رسائل مزعجة',
+            'fake': '🎭 حسابات مزيفة',
+            'harmful': '🚫 محتوى ضار',
+            'inappropriate': '⚠️ محتوى غير مناسب',
+            'other': '📝 أخرى'
+        }
+
+        btns = []
+        for category_name, reason_ids in categories.items():
+            if not reason_ids:
+                continue
+            label = (category_labels_video if report_type == "video" else category_labels_account).get(
+                category_name, category_name.title()
+            )
+            btns.append(InlineKeyboardButton(label, callback_data=f"category_{category_name}"))
+
+        rows.extend(TikTokKeyboards._chunk_buttons(btns, per_row=2))
+        # زر عرض الكل
+        rows.append([InlineKeyboardButton("📋 عرض جميع الأنواع", callback_data="show_all_reasons")])
         
-        keyboard.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_target")])
-        return InlineKeyboardMarkup(keyboard)
+        rows.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_target")])
+        return InlineKeyboardMarkup(rows)
     
     @staticmethod
     def get_category_reasons_menu(category: str, report_type: str = "video"):
         """قائمة أنواع البلاغات لفئة محددة"""
-        keyboard = []
-        
+        rows: list[list[InlineKeyboardButton]] = []
         categories = REPORT_CATEGORIES.get(report_type, {})
         reason_ids = categories.get(category, [])
-        
-        if reason_ids:
-            for reason_id in reason_ids:
-                if reason_id in REPORT_REASONS:
-                    reason_text = REPORT_REASONS[reason_id]
-                    # تقصير النص إذا كان طويلاً
-                    if len(reason_text) > 30:
-                        reason_text = reason_text[:27] + "..."
-                    
-                    keyboard.append([InlineKeyboardButton(
-                        reason_text, 
-                        callback_data=f"reason_{reason_id}"
-                    )])
-        
-        keyboard.append([InlineKeyboardButton("🔙 العودة للفئات", callback_data="back_to_categories")])
-        return InlineKeyboardMarkup(keyboard)
+        # تصفية بحيث تكون معرفة فعلياً
+        valid_reasons = sorted([r for r in reason_ids if r in REPORT_REASONS])
+
+        btns = []
+        for rid in valid_reasons:
+            title = REPORT_REASONS[rid]
+            label = f"{title} ({rid})"
+            if len(label) > 34:
+                label = label[:31] + "..."
+            btns.append(InlineKeyboardButton(label, callback_data=f"reason_{rid}"))
+
+        rows.extend(TikTokKeyboards._chunk_buttons(btns, per_row=2))
+        rows.append([InlineKeyboardButton("🔙 العودة للفئات", callback_data="back_to_categories")])
+        return InlineKeyboardMarkup(rows)
     
     @staticmethod
     def get_all_reasons_menu(report_type: str = "video"):
         """قائمة جميع أنواع البلاغات"""
-        keyboard = []
-        
-        # تجميع الأنواع حسب الفئة
+        rows: list[list[InlineKeyboardButton]] = []
         categories = REPORT_CATEGORIES.get(report_type, {})
-        
-        for category_name, reason_ids in categories.items():
-            if reason_ids:
-                # إضافة عنوان الفئة
-                category_labels = {
-                    'sexual': '🔞 محتوى جنسي',
-                    'violent': '⚔️ عنف وإيذاء',
-                    'harassment': '🚫 تحرش وإساءة',
-                    'misinformation': '❌ معلومات خاطئة',
-                    'impersonation': '👤 انتحال شخصية',
-                    'copyright': '📜 حقوق الملكية',
-                    'discrimination': '🚷 تمييز وعنصرية',
-                    'commercial': '💰 محتوى تجاري',
-                    'spam': '📧 رسائل مزعجة',
-                    'fake': '🎭 حسابات مزيفة',
-                    'harmful': '🚫 محتوى ضار',
-                    'inappropriate': '⚠️ محتوى غير مناسب',
-                    'other': '📝 أخرى'
-                }
-                
-                category_label = category_labels.get(category_name, category_name.title())
-                keyboard.append([InlineKeyboardButton(
-                    f"📂 {category_label}", 
-                    callback_data=f"category_{category_name}"
-                )])
-        
-        keyboard.append([InlineKeyboardButton("🔙 العودة للفئات", callback_data="back_to_categories")])
-        return InlineKeyboardMarkup(keyboard)
+        # تجميع جميع الأسباب الفريدة
+        all_ids = set()
+        for _, reason_ids in categories.items():
+            all_ids.update([r for r in reason_ids if r in REPORT_REASONS])
+        btns = []
+        for rid in sorted(all_ids):
+            title = REPORT_REASONS[rid]
+            label = f"{title} ({rid})"
+            if len(label) > 34:
+                label = label[:31] + "..."
+            btns.append(InlineKeyboardButton(label, callback_data=f"reason_{rid}"))
+        rows.extend(TikTokKeyboards._chunk_buttons(btns, per_row=2))
+        rows.append([InlineKeyboardButton("🔙 العودة للفئات", callback_data="back_to_categories")])
+        return InlineKeyboardMarkup(rows)
     
     @staticmethod
     def get_reports_per_account_menu():

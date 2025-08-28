@@ -113,7 +113,7 @@ class TikTokHandlers:
         await update.message.reply_text(
             "✅ تم تحديد الهدف بنجاح!\n\n"
             "الآن اختر نوع البلاغ:",
-            reply_markup=TikTokKeyboards.get_report_reasons_menu()
+            reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[user_id]['report_type'].value)
         )
         
         return WAITING_FOR_REASON
@@ -214,7 +214,7 @@ class TikTokHandlers:
         elif query.data == "back_to_reasons":
             await query.edit_message_text(
                 "اختر نوع البلاغ:",
-                reply_markup=TikTokKeyboards.get_report_reasons_menu()
+                reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[query.from_user.id]['report_type'].value)
             )
             return WAITING_FOR_REASON
     
