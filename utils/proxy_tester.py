@@ -110,7 +110,7 @@ class ProxyTester:
             return await asyncio.wait_for(future, timeout=5)
             
         except Exception as e:
-            print(f"خطأ في اختبار الاتصال: {e}")
+            print(f"❌ خطأ في اختبار الاتصال: {e}")
             return False
     
     def _test_socket_connection(self, host: str, port: int) -> bool:
@@ -142,6 +142,23 @@ class ProxyTester:
         
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+                # اختبار مع TikTok مباشرة
+                async with session.get(
+                    'https://www.tiktok.com',
+                    proxy=proxy,
+                    ssl=False,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                ) as response:
+                    if response.status == 200:
+                        return {
+                            'country': 'TikTok Accessible',
+                            'anonymity': 'transparent'
+                        }
+        except Exception:
+            pass
+        
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
                 async with session.get(
                     'https://httpbin.org/ip',
                     proxy=proxy,
@@ -170,7 +187,7 @@ class ProxyTester:
                 timeout=timeout
             ) as session:
                 
-                # اختبار مع TikTok
+                # اختبار مع TikTok مباشرة
                 async with session.get(
                     'https://www.tiktok.com',
                     proxy=proxy,
@@ -178,7 +195,7 @@ class ProxyTester:
                 ) as response:
                     if response.status == 200:
                         return {
-                            'country': 'Unknown',
+                            'country': 'TikTok Accessible',
                             'anonymity': 'socks5'
                         }
                         
