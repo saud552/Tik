@@ -62,7 +62,17 @@ fi
 # ===== 2) Python venv =====
 log "Setting up Python virtual environment in $VENV_DIR ..."
 if [ ! -d "$VENV_DIR" ]; then
-	$PY_BIN -m venv "$VENV_DIR"
+	if ! $PY_BIN -m venv "$VENV_DIR" 2>/dev/null; then
+		log "python3-venv missing, installing..."
+		if command -v sudo >/dev/null 2>&1; then
+			sudo apt-get update -y || true
+			sudo apt-get install -y python3.13-venv || sudo apt-get install -y python3-venv || true
+		else
+			apt-get update -y || true
+			apt-get install -y python3.13-venv || apt-get install -y python3-venv || true
+		fi
+		$PY_BIN -m venv "$VENV_DIR"
+	fi
 fi
 # shellcheck disable=SC1090
 . "$VENV_DIR/bin/activate"
@@ -85,17 +95,30 @@ mkdir -p logs data
 # ===== 6) Env file =====
 if [ ! -f .env ]; then
 	warn ".env not found. Creating a minimal template..."
-	cat > .env << 'ENV'
-TELEGRAM_BOT_TOKEN=
-ADMIN_USER_ID=
-ENCRYPTION_KEY=
-HTTP_TIMEOUT_SECONDS=45
-HTTP_MAX_RETRIES=3
-HTTP_BACKOFF_FACTOR=0.8
+	ENC_KEY=$($PY_BIN - << 'PY'
+from cryptography.fernet import Fernet
+print(Fernet.generate_key().decode())
+PY
+)
+	cat > .env << ENV
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+# Comma-separated admin IDs
+ADMIN_USER_IDS=${ADMIN_USER_IDS}
+ENCRYPTION_KEY=${ENCRYPTION_KEY:-$ENC_KEY}
+HTTP_TIMEOUT_SECONDS=${HTTP_TIMEOUT_SECONDS:-45}
+HTTP_MAX_RETRIES=${HTTP_MAX_RETRIES:-3}
+HTTP_BACKOFF_FACTOR=${HTTP_BACKOFF_FACTOR:-0.8}
 # Optional proxies, example: HTTP_PROXIES="http://user:pass@host:port;https://user:pass@host:port"
-HTTP_PROXIES=
+HTTP_PROXIES=${HTTP_PROXIES}
 ENV
-	log "Please edit .env with proper values before running the bot."
+	log "Created .env; ensure TELEGRAM_BOT_TOKEN and ADMIN_USER_IDS are set."
+fi
+
+# ===== 6.1) Auto start if requested =====
+if [ "${AUTO_START:-1}" = "1" ]; then
+	log "Auto-starting the bot..."
+	nohup $APP_START > logs/bot.out 2>&1 & echo $! > bot.pid || true
+	log "Bot started with PID $(cat bot.pid 2>/dev/null || echo '?')"
 fi
 
 # ===== 7) Sanity checks =====

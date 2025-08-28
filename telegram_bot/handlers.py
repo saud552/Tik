@@ -8,7 +8,7 @@ from core.report_scheduler import ReportScheduler
 from core.tiktok_reporter import TikTokReporter
 from models.job import ReportType
 from telegram_bot.keyboards import TikTokKeyboards
-from config.settings import ADMIN_USER_ID, REPORT_REASONS
+from config.settings import ADMIN_USER_ID, ADMIN_USER_IDS, REPORT_REASONS
 from core.web_login_automator import TikTokWebLoginAutomator
 
 # حالات المحادثة
@@ -34,7 +34,8 @@ class TikTokHandlers:
         """أمر البداية"""
         if not update or not update.effective_user or not update.message:
             return
-        if update.effective_user.id != ADMIN_USER_ID:
+        allowed_admins = set(ADMIN_USER_IDS or ([] if not ADMIN_USER_ID else [ADMIN_USER_ID]))
+        if update.effective_user.id not in allowed_admins:
             await update.message.reply_text("❌ عذراً، هذا البوت متاح للمدير فقط.")
             return
         
@@ -151,10 +152,9 @@ class TikTokHandlers:
             reason_text = REPORT_REASONS[reason_id]
             await query.edit_message_text(
                 f"✅ تم اختيار نوع البلاغ: {reason_text}\n\n"
-                "الآن اختر عدد البلاغات المراد تنفيذها من كل حساب:",
-                reply_markup=TikTokKeyboards.get_reports_per_account_menu()
+                "أدخل عدد البلاغات المراد تنفيذها من كل حساب (رقم صحيح):",
+                reply_markup=TikTokKeyboards.get_cancel_keyboard()
             )
-            
             return WAITING_FOR_REPORTS_COUNT
             
         elif query.data.startswith("category_"):
@@ -204,30 +204,34 @@ class TikTokHandlers:
             return WAITING_FOR_TARGET
     
     async def handle_reports_count_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """معالجة اختيار عدد البلاغات"""
-        query = update.callback_query
-        if not query:
+        """استقبال العدد كإدخال يدوي ثم الانتقال للفاصل"""
+        # في النسخة اليدوية، نأتي من رسالة نصية لا من Callback
+        message = getattr(update, 'message', None)
+        if not message or not message.from_user:
             return ConversationHandler.END
-        await query.answer()
-        
-        if query.data.startswith("reports_"):
-            reports_count = int(query.data.split("_")[1])
-            user_id = query.from_user.id
+        user_id = message.from_user.id
+        if user_id not in self.user_states:
+            await message.reply_text("❌ جلسة منتهية. يرجى البدء من جديد.")
+            return ConversationHandler.END
+
+        text = (message.text or '').strip()
+        try:
+            reports_count = int(text)
+            if reports_count <= 0:
+                raise ValueError
             self.user_states[user_id]['reports_per_account'] = reports_count
-            
-            # طلب الفاصل الزمني بين البلاغات
-            await query.edit_message_text(
-                "⏱️ أدخل الفاصل الزمني بالثواني بين كل عملية بلاغ والتي تليها:\n\n"
-                "مثال: 5",
+        except Exception:
+            await message.reply_text(
+                "❌ قيمة غير صحيحة. أدخل رقمًا صحيحًا (>0).",
                 reply_markup=TikTokKeyboards.get_cancel_keyboard()
             )
-            return WAITING_FOR_INTERVAL
-        elif query.data == "back_to_reasons":
-            await query.edit_message_text(
-                "اختر نوع البلاغ:",
-                reply_markup=TikTokKeyboards.get_report_reasons_menu(self.user_states[query.from_user.id]['report_type'].value)
-            )
-            return WAITING_FOR_REASON
+            return WAITING_FOR_REPORTS_COUNT
+
+        await message.reply_text(
+            "⏱️ أدخل الفاصل الزمني بالثواني بين كل عملية بلاغ والتي تليها:\n\nمثال: 5",
+            reply_markup=TikTokKeyboards.get_cancel_keyboard()
+        )
+        return WAITING_FOR_INTERVAL
 
     async def handle_interval_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """استقبال الفاصل الزمني ثم الانتقال لإدخال البروكسيات"""

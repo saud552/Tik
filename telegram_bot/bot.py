@@ -67,7 +67,7 @@ class TikTokBot:
                     CallbackQueryHandler(self.handlers.handle_reason_selection)
                 ],
                 WAITING_FOR_REPORTS_COUNT: [
-                    CallbackQueryHandler(self.handlers.handle_reports_count_selection)
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_reports_count_selection)
                 ],
                 WAITING_FOR_INTERVAL: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_interval_input)
