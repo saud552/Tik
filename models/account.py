@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -13,7 +13,7 @@ class TikTokAccount:
     success_count: int = 0
     fail_count: int = 0
     last_error: Optional[str] = None
-    created_at: Optional[datetime] = None
+    created_at: datetime = field(default_factory=datetime.now)
     proxy: Optional[str] = None
     
     def __post_init__(self):

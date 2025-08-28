@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -21,27 +21,24 @@ class ReportJob:
     target: str  # رابط الفيديو أو اسم المستخدم
     reason: int  # نوع البلاغ
     reports_per_account: int
-    id: Optional[str] = None
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     status: JobStatus = JobStatus.PENDING
-    created_at: Optional[datetime] = None
+    created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     total_reports: int = 0
     successful_reports: int = 0
     failed_reports: int = 0
-    assigned_accounts: Optional[List[str]] = None
-    progress: Optional[Dict[str, Any]] = None
+    assigned_accounts: List[str] = field(default_factory=list)
+    progress: Dict[str, Any] = field(default_factory=dict)
     error_message: Optional[str] = None
     
     def __post_init__(self):
-        if self.id is None:
-            self.id = str(uuid.uuid4())
-        if self.created_at is None:
-            self.created_at = datetime.now()
-        if self.assigned_accounts is None:
-            self.assigned_accounts = []
-        if self.progress is None:
-            self.progress = {}
+        # Ensures runtime fields are initialized even if constructed via from_dict with partial data
+        if self.started_at is not None and isinstance(self.started_at, str):
+            self.started_at = datetime.fromisoformat(self.started_at)
+        if self.completed_at is not None and isinstance(self.completed_at, str):
+            self.completed_at = datetime.fromisoformat(self.completed_at)
     
     def to_dict(self) -> Dict[str, Any]:
         """تحويل المهمة إلى قاموس"""
