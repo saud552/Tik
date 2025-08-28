@@ -90,11 +90,25 @@ class ReportScheduler:
         """توزيع البلاغات على الحسابات"""
         # توزيع البلاغات بالتساوي
         reports_per_account = job.reports_per_account
+        proxies_list = job.progress.get('proxies') if isinstance(job.progress, dict) else None
+        proxy_index = 0
         
         for account in accounts:
             if self.stop_event.is_set():
                 break
                 
+            # إعداد بروكسي socks5 إن وجد
+            if proxies_list:
+                if proxy_index >= len(proxies_list):
+                    proxy_index = 0
+                socks = proxies_list[proxy_index]
+                proxy_index += 1
+                self.reporter.session.proxies.update({'http': socks, 'https': socks})
+            else:
+                # إزالة أي بروكسي سابق
+                self.reporter.session.proxies.pop('http', None)
+                self.reporter.session.proxies.pop('https', None)
+
             # تسجيل الدخول إلى الحساب
             if not await self.reporter.login_account(account):
                 job.update_progress(account.id, "failed", "فشل في تسجيل الدخول")

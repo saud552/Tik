@@ -281,23 +281,8 @@ class TikTokBot:
     async def run(self):
         """تشغيل البوت"""
         logger.info("بدء تشغيل بوت بلاغات TikTok...")
-        
-        # بدء البوت
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.updater.start_polling()
-        
-        logger.info("تم تشغيل البوت بنجاح!")
-        
-        # انتظار الإيقاف
-        try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            logger.info("إيقاف البوت...")
-        finally:
-            await self.application.updater.stop()
-            await self.application.stop()
-            await self.application.shutdown()
+        # تشغيل polling بطريقة متوافقة مع PTB v20
+        await asyncio.to_thread(self.application.run_polling)
 
 # تشغيل البوت
 if __name__ == "__main__":
