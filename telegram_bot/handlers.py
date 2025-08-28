@@ -424,8 +424,9 @@ class TikTokHandlers:
     async def show_job_status(self, query):
         """عرض حالة المهام"""
         jobs = self.scheduler.get_all_jobs()
+        recent = self.scheduler.get_recent_jobs()
         
-        if not jobs:
+        if not jobs and not recent:
             await query.edit_message_text(
                 "📊 حالة المهام\n\n"
                 "لا توجد مهام حالياً.",
@@ -452,6 +453,15 @@ class TikTokHandlers:
                 f"   التقدم: {progress:.1f}%\n"
                 f"   النجاح: {job.successful_reports}/{job.total_reports}\n\n"
             )
+
+        if recent:
+            status_text += "— آخر المهام المكتملة —\n"
+            for job in recent:
+                status_text += (
+                    f"{('✅' if job.status.value=='completed' else '❌')} {job.id[:8]} | "
+                    f"{'فيديو' if job.report_type == ReportType.VIDEO else 'حساب'} | "
+                    f"نجاح: {job.successful_reports}/{job.total_reports}\n"
+                )
         
         await query.edit_message_text(
             status_text,

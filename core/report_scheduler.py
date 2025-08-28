@@ -13,6 +13,7 @@ class ReportScheduler:
         self.reporter = TikTokReporter(account_manager)
         self.active_jobs: Dict[str, ReportJob] = {}
         self.job_queue: List[ReportJob] = []
+        self.completed_jobs: List[ReportJob] = []
         self.is_running = False
         self.stop_event = asyncio.Event()
     
@@ -90,6 +91,13 @@ class ReportScheduler:
             # إزالة المهمة من المهام النشطة
             if job.id in self.active_jobs:
                 del self.active_jobs[job.id]
+            # حفظ المهمة في السجل المكتمل (بحد أقصى 10)
+            try:
+                self.completed_jobs.append(job)
+                if len(self.completed_jobs) > 10:
+                    self.completed_jobs = self.completed_jobs[-10:]
+            except Exception:
+                pass
     
     async def distribute_reports(self, job: ReportJob, accounts: List[TikTokAccount]):
         """توزيع البلاغات على الحسابات"""
@@ -207,6 +215,12 @@ class ReportScheduler:
         all_jobs.extend(self.job_queue)
         
         return all_jobs
+
+    def get_recent_jobs(self, limit: int = 5) -> List[ReportJob]:
+        """الحصول على آخر المهام المكتملة/الفاشلة"""
+        if not self.completed_jobs:
+            return []
+        return list(reversed(self.completed_jobs[-limit:]))
     
     def get_job_stats(self) -> Dict[str, Any]:
         """الحصول على إحصائيات المهام"""
