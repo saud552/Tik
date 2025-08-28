@@ -50,7 +50,7 @@ def main():
         
         # إنشاء وتشغيل البوت
         bot = TikTokBot()
-        bot.run()
+        asyncio.run(bot.run())
         
     except KeyboardInterrupt:
         logger.info("⏹️ تم إيقاف البوت بواسطة المستخدم")
