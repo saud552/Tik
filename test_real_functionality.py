@@ -32,24 +32,14 @@ async def test_real_login():
         # إنشاء reporter
         reporter = TikTokReporter()
         
-        # اختبار تسجيل الدخول
+        # اختبار تسجيل الدخول: يجب أن ينجح فقط إذا كانت الاستجابة موثقة بوجود جلسة
         print("📱 اختبار تسجيل الدخول عبر Mobile API...")
-        success = await reporter._mobile_login("test_user", "test_password")
-        
-        if success:
-            print("✅ نجح تسجيل الدخول عبر Mobile API")
-        else:
-            print("❌ فشل تسجيل الدخول عبر Mobile API (متوقع للبيانات التجريبية)")
-        
+        mobile_ok = await reporter._mobile_login("test_id", "test_user", "test_password")
         print("🌐 اختبار تسجيل الدخول عبر Web API...")
-        success = await reporter._web_login("test_user", "test_password")
-        
-        if success:
-            print("✅ نجح تسجيل الدخول عبر Web API")
-        else:
-            print("❌ فشل تسجيل الدخول عبر Web API (متوقع للبيانات التجريبية)")
-        
-        return True
+        web_ok = await reporter._web_login("test_id", "test_user", "test_password")
+
+        # نجاح الاختبار = أي مسار نجح فعلاً
+        return bool(mobile_ok or web_ok)
         
     except Exception as e:
         print(f"❌ خطأ في اختبار تسجيل الدخول: {e}")
@@ -84,16 +74,10 @@ async def test_real_reporting():
         else:
             print("❌ فشل في استخراج معلومات الفيديو (متوقع للبيانات التجريبية)")
         
-        # اختبار البلاغ عن الفيديو
+        # اختبار البلاغ عن الفيديو (لا يعتبر نجاحاً إلا باستجابة JSON صحيحة)
         print("🚨 اختبار البلاغ عن الفيديو...")
         success = await reporter.report_video(test_account, "1234567890123456789", "987654321", 1001)
-        
-        if success:
-            print("✅ نجح البلاغ عن الفيديو")
-        else:
-            print("❌ فشل البلاغ عن الفيديو (متوقع للبيانات التجريبية)")
-        
-        return True
+        return bool(success)
         
     except Exception as e:
         print(f"❌ خطأ في اختبار البلاغات: {e}")
@@ -111,7 +95,7 @@ async def test_proxy_system():
         
         # اختبار بروكسي تجريبي
         print("🔍 اختبار بروكسي تجريبي...")
-        test_proxy = "socks5://127.0.0.1:1080"
+        test_proxy = "socks5h://127.0.0.1:1080"
         
         result = await tester.test_proxy_async(test_proxy)
         

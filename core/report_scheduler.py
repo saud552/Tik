@@ -102,6 +102,9 @@ class ReportScheduler:
                 if proxy_index >= len(proxies_list):
                     proxy_index = 0
                 socks = proxies_list[proxy_index]
+                # تحويل إلى socks5h لتمرير DNS عبر البروكسي عند الحاجة
+                if socks.startswith('socks5://') and not socks.startswith('socks5h://'):
+                    socks = socks.replace('socks5://', 'socks5h://', 1)
                 proxy_index += 1
                 self.reporter.session.proxies.update({'http': socks, 'https': socks})
             else:
@@ -123,6 +126,7 @@ class ReportScheduler:
                 if job.report_type == ReportType.VIDEO:
                     # استخراج معلومات الفيديو
                     video_info = await self.reporter.extract_video_info(job.target)
+                    # إلزامية تحقق وجود الفيديو ومعرف المالك
                     if not video_info or not video_info[0] or not video_info[1]:
                         job.update_progress(account.id, "failed", "فشل في استخراج معلومات الفيديو")
                         continue
@@ -130,9 +134,8 @@ class ReportScheduler:
                     video_id, owner_user_id = video_info
                     success = await self.reporter.report_video(account, video_id, owner_user_id, job.reason)
                 elif job.report_type == ReportType.ACCOUNT:
-                    success = await self.reporter.report_account(
-                        account, job.target, job.reason
-                    )
+                    # داخل report_account سيتم التحقق من وجود المستخدم واستخراج user_id بشكل إلزامي
+                    success = await self.reporter.report_account(account, job.target, job.reason)
                 
                 if success:
                     job.successful_reports += 1

@@ -94,7 +94,7 @@ class ProxyTester:
         """اختبار الاتصال الأساسي"""
         try:
             # تحليل البروكسي
-            if proxy.startswith('socks5://'):
+            if proxy.startswith('socks5://') or proxy.startswith('socks5h://'):
                 host, port = self._parse_socks5_proxy(proxy)
             elif proxy.startswith('http://') or proxy.startswith('https://'):
                 parsed = urlparse(proxy)
@@ -126,7 +126,9 @@ class ProxyTester:
     
     def _parse_socks5_proxy(self, proxy: str) -> Tuple[str, int]:
         """تحليل بروكسي SOCKS5"""
-        if proxy.startswith('socks5://'):
+        if proxy.startswith('socks5h://'):
+            proxy = proxy[10:]
+        elif proxy.startswith('socks5://'):
             proxy = proxy[9:]
         
         if ':' in proxy:
@@ -263,12 +265,15 @@ class ProxyTester:
     
     def format_proxy_for_use(self, proxy: str) -> str:
         """تنسيق البروكسي للاستخدام"""
-        if proxy.startswith('socks5://'):
+        if proxy.startswith('socks5h://'):
             return proxy
+        if proxy.startswith('socks5://'):
+            # افضّل socks5h لتمرير DNS عبر البروكسي
+            return proxy.replace('socks5://', 'socks5h://', 1)
         
         # إذا كان البروكسي بصيغة ip:port
         if ':' in proxy and not proxy.startswith(('http://', 'https://')):
-            return f"socks5://{proxy}"
+            return f"socks5h://{proxy}"
         
         return proxy
 

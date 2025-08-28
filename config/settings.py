@@ -9,6 +9,9 @@ TIKTOK_MOBILE_API = "https://api-h2.tiktokv.com"
 TIKTOK_WEB_API = "https://www.tiktok.com/api"
 TIKTOK_PASSPORT_API = "https://www.tiktok.com/passport"
 
+# توافق مع الاختبارات: قاعدة API عامة
+TIKTOK_API_BASE = TIKTOK_MOBILE_API
+
 # إعدادات API محدثة وموثقة
 TIKTOK_API_ENDPOINTS = {
     'login': 'https://www.tiktok.com/passport/web/login/',

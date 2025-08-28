@@ -143,12 +143,12 @@ class TikTokReporter:
                 return False
             
             # محاولة 1: تسجيل الدخول عبر الويب (الأكثر موثوقية)
-            if await self._web_login(account.username, password):
+            if await self._web_login(account.id, account.username, password):
                 print(f"✅ تم تسجيل الدخول بنجاح عبر الويب للحساب {account.username}")
                 return True
             
             # محاولة 2: تسجيل الدخول عبر Mobile API
-            if await self._mobile_login(account.username, password):
+            if await self._mobile_login(account.id, account.username, password):
                 print(f"✅ تم تسجيل الدخول بنجاح عبر Mobile API للحساب {account.username}")
                 return True
             
@@ -159,7 +159,7 @@ class TikTokReporter:
             print(f"❌ خطأ في تسجيل دخول الحساب {account.username}: {e}")
             return False
     
-    async def _web_login(self, username: str, password: str) -> bool:
+    async def _web_login(self, account_id: str, username: str, password: str) -> bool:
         """تسجيل الدخول عبر TikTok Web API"""
         try:
             # أولاً: الحصول على صفحة تسجيل الدخول للحصول على CSRF token
@@ -209,7 +209,7 @@ class TikTokReporter:
                     # حفظ الكوكيز
                     cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
                     if self.account_manager:
-                        self.account_manager.update_account_cookies(account.id, cookies)
+                        self.account_manager.update_account_cookies(account_id, cookies)
                     return True
             
             print(f"❌ فشل في تسجيل الدخول عبر الويب: {login_response.status_code}")
@@ -219,7 +219,7 @@ class TikTokReporter:
             print(f"❌ خطأ في تسجيل الدخول عبر الويب: {e}")
             return False
     
-    async def _mobile_login(self, username: str, password: str) -> bool:
+    async def _mobile_login(self, account_id: str, username: str, password: str) -> bool:
         """تسجيل الدخول عبر TikTok Mobile API"""
         try:
             # معلومات الجهاز
@@ -267,7 +267,7 @@ class TikTokReporter:
                         # حفظ الكوكيز
                         cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
                         if self.account_manager:
-                            self.account_manager.update_account_cookies(account.id, cookies)
+                            self.account_manager.update_account_cookies(account_id, cookies)
                         return True
                 except json.JSONDecodeError:
                     pass
@@ -697,6 +697,11 @@ class TikTokReporter:
     async def _report_video_web(self, video_id: str, user_id: str, reason: int) -> bool:
         """الإبلاغ عن الفيديو عبر Web API"""
         try:
+            # التأكد من وجود كوكيز جلسة لازمة قبل محاولة الإبلاغ عبر الويب
+            required_cookies = ['ttwid', 'tt_csrf_token']
+            if not any(cookie in self.session.cookies for cookie in required_cookies):
+                print("❌ لا توجد كوكيز جلسة صالحة للإبلاغ عبر الويب")
+                return False
             # بناء بيانات البلاغ
             report_data = {
                 'aweme_id': video_id,
@@ -721,16 +726,13 @@ class TikTokReporter:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
-                    if result.get('status_code') == 0 or result.get('success'):
+                    if result.get('status_code') == 0 or result.get('success') is True:
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
                         return False
                 except json.JSONDecodeError:
-                    # إذا لم تكن الاستجابة JSON، نتحقق من النص
-                    if 'success' in response.text.lower() or 'reported' in response.text.lower():
-                        return True
-                    print("❌ استجابة غير صحيحة من Web API")
+                    print("❌ استجابة غير صحيحة من Web API (ليست JSON صحيحة)")
                     return False
             
             print(f"❌ فشل في البلاغ: {response.status_code}")
@@ -863,6 +865,11 @@ class TikTokReporter:
     async def _report_account_web(self, user_id: str, reason: int) -> bool:
         """الإبلاغ عن الحساب عبر Web API"""
         try:
+            # التأكد من وجود كوكيز جلسة لازمة قبل محاولة الإبلاغ عبر الويب
+            required_cookies = ['ttwid', 'tt_csrf_token']
+            if not any(cookie in self.session.cookies for cookie in required_cookies):
+                print("❌ لا توجد كوكيز جلسة صالحة للإبلاغ عبر الويب")
+                return False
             # بناء بيانات البلاغ
             report_data = {
                 'user_id': user_id,
@@ -886,16 +893,13 @@ class TikTokReporter:
                 try:
                     result = response.json()
                     # التحقق من نجاح البلاغ
-                    if result.get('status_code') == 0 or result.get('success'):
+                    if result.get('status_code') == 0 or result.get('success') is True:
                         return True
                     else:
                         print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
                         return False
                 except json.JSONDecodeError:
-                    # إذا لم تكن الاستجابة JSON، نتحقق من النص
-                    if 'success' in response.text.lower() or 'reported' in response.text.lower():
-                        return True
-                    print("❌ استجابة غير صحيحة من Web API")
+                    print("❌ استجابة غير صحيحة من Web API (ليست JSON صحيحة)")
                     return False
             
             print(f"❌ فشل في البلاغ: {response.status_code}")
