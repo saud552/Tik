@@ -4,14 +4,18 @@ import random
 import re
 import json
 import uuid
+import hashlib
 from typing import Optional, Dict, Tuple
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urlparse, parse_qs
 from config.settings import (
     TIKTOK_BASE_URL,
-    TIKTOK_API_BASE,
     TIKTOK_MOBILE_API,
+    TIKTOK_WEB_API,
+    TIKTOK_PASSPORT_API,
+    TIKTOK_API_ENDPOINTS,
+    TIKTOK_APP_CONFIG,
     HUMAN_DELAYS,
     HTTP_TIMEOUT_SECONDS,
     HTTP_MAX_RETRIES,
@@ -124,51 +128,155 @@ class TikTokReporter:
         return random.choice(devices)
     
     async def login_account(self, account: TikTokAccount) -> bool:
-        """تسجيل دخول الحساب مع تحسينات الأمان"""
+        """تسجيل دخول الحساب باستخدام TikTok API الحقيقي"""
         try:
             # محاكاة تأخير بشري
-            self._simulate_human_delay()
+            self._simulate_human_delay(HUMAN_DELAYS['login_delay'], HUMAN_DELAYS['login_delay'] + 2)
             
             # تحديث User-Agent
             self.session.headers['User-Agent'] = random.choice(self.user_agents)
             
-            # محاولة تسجيل الدخول عبر API محدث
+            # الحصول على كلمة المرور
             password = self.account_manager.get_decrypted_password(account.id)
             if not password:
+                print(f"❌ فشل في الحصول على كلمة المرور للحساب {account.username}")
                 return False
-                
+            
+            # محاولة 1: تسجيل الدخول عبر الويب (الأكثر موثوقية)
+            if await self._web_login(account.username, password):
+                print(f"✅ تم تسجيل الدخول بنجاح عبر الويب للحساب {account.username}")
+                return True
+            
+            # محاولة 2: تسجيل الدخول عبر Mobile API
+            if await self._mobile_login(account.username, password):
+                print(f"✅ تم تسجيل الدخول بنجاح عبر Mobile API للحساب {account.username}")
+                return True
+            
+            print(f"❌ فشل في تسجيل الدخول للحساب {account.username}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ خطأ في تسجيل دخول الحساب {account.username}: {e}")
+            return False
+    
+    async def _web_login(self, username: str, password: str) -> bool:
+        """تسجيل الدخول عبر TikTok Web API"""
+        try:
+            # أولاً: الحصول على صفحة تسجيل الدخول للحصول على CSRF token
+            login_page_url = f"{TIKTOK_PASSPORT_API}/web/login/"
+            response = self.session.get(login_page_url, timeout=HTTP_TIMEOUT_SECONDS)
+            
+            if response.status_code != 200:
+                print(f"❌ فشل في الوصول لصفحة تسجيل الدخول: {response.status_code}")
+                return False
+            
+            # البحث عن CSRF token
+            csrf_match = re.search(r'csrf_token["\']?\s*:\s*["\']([^"\']+)["\']', response.text)
+            if not csrf_match:
+                print("❌ لم يتم العثور على CSRF token")
+                return False
+            
+            csrf_token = csrf_match.group(1)
+            
+            # بناء بيانات تسجيل الدخول
             login_data = {
-                'username': account.username,
+                'username': username,
+                'password': password,
+                'csrf_token': csrf_token,
+                'aid': TIKTOK_APP_CONFIG['web']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['web']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['web']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['web']['version_name'],
+                'device_platform': TIKTOK_APP_CONFIG['web']['device_platform'],
+                'channel': TIKTOK_APP_CONFIG['web']['channel']
+            }
+            
+            # إرسال طلب تسجيل الدخول
+            login_response = self.session.post(
+                TIKTOK_API_ENDPOINTS['login'],
+                data=login_data,
+                timeout=HTTP_TIMEOUT_SECONDS,
+                allow_redirects=True
+            )
+            
+            # التحقق من نجاح تسجيل الدخول
+            if login_response.status_code == 200:
+                # التحقق من وجود كوكيز الجلسة
+                session_cookies = ['sessionid', 'ttwid', 'tt_csrf_token']
+                has_session = any(cookie in self.session.cookies for cookie in session_cookies)
+                
+                if has_session:
+                    # حفظ الكوكيز
+                    cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
+                    if self.account_manager:
+                        self.account_manager.update_account_cookies(account.id, cookies)
+                    return True
+            
+            print(f"❌ فشل في تسجيل الدخول عبر الويب: {login_response.status_code}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ خطأ في تسجيل الدخول عبر الويب: {e}")
+            return False
+    
+    async def _mobile_login(self, username: str, password: str) -> bool:
+        """تسجيل الدخول عبر TikTok Mobile API"""
+        try:
+            # معلومات الجهاز
+            device_info = self._get_device_info()
+            
+            # بناء بيانات تسجيل الدخول
+            login_data = {
+                'username': username,
                 'password': password,
                 'mix_mode': '1',
                 'type': '1',
-                'webcast_sdk_version': '2201-3.4.2',
-                'channel': 'tiktok_web',
-                'device_platform': 'webapp',
-                'aid': '1988',
-                'app_name': 'tiktok_web',
-                'version_code': '220100',
-                'version_name': '22.1.0'
+                'device_platform': 'android',
+                'aid': TIKTOK_APP_CONFIG['mobile_android']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['mobile_android']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['mobile_android']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['mobile_android']['version_name'],
+                'channel': TIKTOK_APP_CONFIG['mobile_android']['channel'],
+                'os': TIKTOK_APP_CONFIG['mobile_android']['os'],
+                'device_type': device_info['device_type'],
+                'device_brand': device_info['device_brand'],
+                'os_version': device_info['os_version'],
+                'os_api': device_info['os_api'],
+                'resolution': device_info['resolution'],
+                'dpi': device_info['dpi'],
+                'cpu_abi': TIKTOK_APP_CONFIG['mobile_android']['cpu_abi'],
+                'ts': str(int(time.time())),
+                'iid': str(random.randint(1000000000, 9999999999)),
+                'device_id': str(random.randint(1000000000, 9999999999)),
+                'openudid': str(uuid.uuid4()),
+                '_rticket': str(int(time.time() * 1000))
             }
             
+            # إرسال طلب تسجيل الدخول
             response = self.session.post(
-                f"{TIKTOK_BASE_URL}/passport/web/login/",
+                TIKTOK_API_ENDPOINTS['login_mobile'],
                 data=login_data,
                 timeout=HTTP_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:
-                # حفظ الكوكيز
-                cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
-                # تحديث الكوكيز في مدير الحسابات
-                if self.account_manager:
-                    self.account_manager.update_account_cookies(account.id, cookies)
-                return True
+                try:
+                    result = response.json()
+                    # التحقق من نجاح تسجيل الدخول
+                    if result.get('status_code') == 0 and result.get('data', {}).get('user_id'):
+                        # حفظ الكوكيز
+                        cookies = '; '.join([f'{k}={v}' for k, v in self.session.cookies.items()])
+                        if self.account_manager:
+                            self.account_manager.update_account_cookies(account.id, cookies)
+                        return True
+                except json.JSONDecodeError:
+                    pass
             
+            print(f"❌ فشل في تسجيل الدخول عبر Mobile API: {response.status_code}")
             return False
             
         except Exception as e:
-            print(f"خطأ في تسجيل دخول الحساب {account.username}: {e}")
+            print(f"❌ خطأ في تسجيل الدخول عبر Mobile API: {e}")
             return False
     
     def _normalize_tiktok_url(self, url: str) -> str:
@@ -197,7 +305,7 @@ class TikTokReporter:
             
             return url
         except Exception as e:
-            print(f"خطأ في تطبيع الرابط: {e}")
+            print(f"❌ خطأ في تطبيع الرابط: {e}")
             return url
     
     def _extract_video_id_advanced(self, video_url: str) -> Optional[str]:
@@ -229,7 +337,7 @@ class TikTokReporter:
             return None
             
         except Exception as e:
-            print(f"خطأ في استخراج معرف الفيديو: {e}")
+            print(f"❌ خطأ في استخراج معرف الفيديو: {e}")
             return None
     
     def _extract_username_advanced(self, url: str) -> Optional[str]:
@@ -258,7 +366,7 @@ class TikTokReporter:
             return None
             
         except Exception as e:
-            print(f"خطأ في استخراج اسم المستخدم: {e}")
+            print(f"❌ خطأ في استخراج اسم المستخدم: {e}")
             return None
     
     def _is_valid_username(self, username: str) -> bool:
@@ -280,7 +388,7 @@ class TikTokReporter:
         
         return True
     
-    def extract_video_info(self, video_url: str) -> Tuple[Optional[str], Optional[str]]:
+    async def extract_video_info(self, video_url: str) -> Tuple[Optional[str], Optional[str]]:
         """استخراج معلومات الفيديو بطريقة محسنة ومتعددة الأنماط"""
         try:
             # تطبيع الرابط
@@ -289,47 +397,64 @@ class TikTokReporter:
             # استخراج معرف الفيديو
             video_id = self._extract_video_id_advanced(normalized_url)
             if not video_id:
-                print(f"فشل في استخراج معرف الفيديو من: {video_url}")
+                print(f"❌ فشل في استخراج معرف الفيديو من: {video_url}")
                 return None, None
             
             # استخراج اسم المستخدم
             username = self._extract_username_advanced(normalized_url)
             if not username:
-                print(f"فشل في استخراج اسم المستخدم من: {video_url}")
+                print(f"❌ فشل في استخراج اسم المستخدم من: {video_url}")
                 return None, None
             
             # التحقق من وجود الفيديو فعلياً
             if not await self._verify_video_exists(video_id, username):
-                print(f"الفيديو غير موجود أو تم حذفه: {video_id}")
+                print(f"❌ الفيديو غير موجود أو تم حذفه: {video_id}")
                 return None, None
             
             # الحصول على معرف المستخدم
             user_id = await self._get_user_id_advanced(username)
             if not user_id:
-                print(f"فشل في الحصول على معرف المستخدم: {username}")
+                print(f"❌ فشل في الحصول على معرف المستخدم: {username}")
                 return None, None
             
             return video_id, user_id
             
         except Exception as e:
-            print(f"خطأ في استخراج معلومات الفيديو: {e}")
+            print(f"❌ خطأ في استخراج معلومات الفيديو: {e}")
             return None, None
     
     async def _verify_video_exists(self, video_id: str, username: str) -> bool:
-        """التحقق من وجود الفيديو فعلياً"""
+        """التحقق من وجود الفيديو فعلياً باستخدام TikTok API"""
         try:
-            # محاولة الوصول إلى صفحة الفيديو
-            video_url = f"{TIKTOK_BASE_URL}/@{username}/video/{video_id}"
+            # محاولة 1: التحقق عبر Mobile API
+            mobile_url = f"{TIKTOK_MOBILE_API}/aweme/v1/aweme/detail/"
+            mobile_params = {
+                'aweme_id': video_id,
+                'aid': TIKTOK_APP_CONFIG['mobile_android']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['mobile_android']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['mobile_android']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['mobile_android']['version_name'],
+                'device_platform': 'android',
+                'channel': 'googleplay'
+            }
             
-            response = self.session.get(
-                video_url,
-                timeout=HTTP_TIMEOUT_SECONDS,
-                allow_redirects=True
-            )
+            response = self.session.get(mobile_url, params=mobile_params, timeout=HTTP_TIMEOUT_SECONDS)
             
             if response.status_code == 200:
-                # التحقق من أن الصفحة تحتوي على محتوى الفيديو
-                content = response.text.lower()
+                try:
+                    result = response.json()
+                    if result.get('status_code') == 0 and result.get('aweme_detail'):
+                        print(f"✅ تم التحقق من وجود الفيديو {video_id} عبر Mobile API")
+                        return True
+                except json.JSONDecodeError:
+                    pass
+            
+            # محاولة 2: التحقق عبر الويب
+            web_url = f"{TIKTOK_BASE_URL}/@{username}/video/{video_id}"
+            web_response = self.session.get(web_url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=True)
+            
+            if web_response.status_code == 200:
+                content = web_response.text.lower()
                 
                 # مؤشرات وجود الفيديو
                 video_indicators = [
@@ -338,11 +463,14 @@ class TikTokReporter:
                     'video-player-container',
                     'tiktok-video',
                     'video-js',
-                    'video-player-wrapper'
+                    'video-player-wrapper',
+                    'aweme-detail',
+                    'video-detail'
                 ]
                 
                 for indicator in video_indicators:
                     if indicator in content:
+                        print(f"✅ تم التحقق من وجود الفيديو {video_id} عبر الويب")
                         return True
                 
                 # التحقق من عدم وجود رسائل خطأ
@@ -352,41 +480,63 @@ class TikTokReporter:
                     'video removed',
                     'content not available',
                     'page not found',
-                    '404'
+                    '404',
+                    'error',
+                    'unavailable'
                 ]
                 
                 for error in error_indicators:
                     if error in content:
+                        print(f"❌ الفيديو {video_id} غير متاح")
                         return False
-                
-                # إذا لم نجد مؤشرات واضحة، نفترض أن الفيديو موجود
-                return True
             
+            print(f"⚠️ لم يتم التأكد من وجود الفيديو {video_id}")
             return False
             
         except Exception as e:
-            print(f"خطأ في التحقق من وجود الفيديو: {e}")
+            print(f"❌ خطأ في التحقق من وجود الفيديو: {e}")
             return False
     
     async def _get_user_id_advanced(self, username: str) -> Optional[str]:
         """الحصول على معرف المستخدم بطريقة متقدمة"""
         try:
-            # محاولة الوصول إلى صفحة المستخدم
-            user_url = f"{TIKTOK_BASE_URL}/@{username}"
+            # محاولة 1: عبر Mobile API
+            mobile_url = f"{TIKTOK_MOBILE_API}/user/detail/"
+            mobile_params = {
+                'unique_id': username,
+                'aid': TIKTOK_APP_CONFIG['mobile_android']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['mobile_android']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['mobile_android']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['mobile_android']['version_name'],
+                'device_platform': 'android',
+                'channel': 'googleplay'
+            }
             
-            response = self.session.get(
-                user_url,
-                timeout=HTTP_TIMEOUT_SECONDS,
-                allow_redirects=True
-            )
+            response = self.session.get(mobile_url, params=mobile_params, timeout=HTTP_TIMEOUT_SECONDS)
             
             if response.status_code == 200:
-                content = response.text
+                try:
+                    result = response.json()
+                    if result.get('status_code') == 0 and result.get('user_info', {}).get('uid'):
+                        user_id = result['user_info']['uid']
+                        print(f"✅ تم الحصول على معرف المستخدم {username}: {user_id} عبر Mobile API")
+                        return user_id
+                except json.JSONDecodeError:
+                    pass
+            
+            # محاولة 2: عبر الويب
+            web_url = f"{TIKTOK_BASE_URL}/@{username}"
+            web_response = self.session.get(web_url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=True)
+            
+            if web_response.status_code == 200:
+                content = web_response.text
                 
                 # طريقة 1: البحث في HTML
                 user_id_match = re.search(r'"id":"(\d+)"', content)
                 if user_id_match:
-                    return user_id_match.group(1)
+                    user_id = user_id_match.group(1)
+                    print(f"✅ تم الحصول على معرف المستخدم {username}: {user_id} عبر الويب")
+                    return user_id
                 
                 # طريقة 2: البحث في JSON
                 json_match = re.search(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', content)
@@ -396,14 +546,18 @@ class TikTokReporter:
                         # استخراج معرف المستخدم من البيانات
                         user_info = data.get('UserModule', {}).get('users', {}).get(username, {})
                         if user_info and 'id' in user_info:
-                            return user_info['id']
+                            user_id = user_info['id']
+                            print(f"✅ تم الحصول على معرف المستخدم {username}: {user_id} عبر SIGI_STATE")
+                            return user_id
                     except Exception:
                         pass
                 
                 # طريقة 3: البحث في meta tags
                 meta_match = re.search(r'<meta property="al:ios:url" content="tiktok://user/(\d+)"', content)
                 if meta_match:
-                    return meta_match.group(1)
+                    user_id = meta_match.group(1)
+                    print(f"✅ تم الحصول على معرف المستخدم {username}: {user_id} عبر meta tags")
+                    return user_id
                 
                 # طريقة 4: البحث في JavaScript
                 js_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?});', content)
@@ -412,21 +566,24 @@ class TikTokReporter:
                         data = json.loads(js_match.group(1))
                         # البحث في البيانات
                         if 'user' in data and 'id' in data['user']:
-                            return data['user']['id']
+                            user_id = data['user']['id']
+                            print(f"✅ تم الحصول على معرف المستخدم {username}: {user_id} عبر __INITIAL_STATE__")
+                            return user_id
                     except Exception:
                         pass
             
+            print(f"❌ فشل في الحصول على معرف المستخدم: {username}")
             return None
             
         except Exception as e:
-            print(f"خطأ في الحصول على معرف المستخدم: {e}")
+            print(f"❌ خطأ في الحصول على معرف المستخدم: {e}")
             return None
     
     async def report_video(self, account: TikTokAccount, video_id: str, user_id: str, reason: int) -> bool:
-        """إبلاغ عن فيديو باستخدام API محدث"""
+        """إبلاغ عن فيديو باستخدام TikTok API الحقيقي"""
         try:
             # محاكاة تأخير بشري
-            self._simulate_human_delay()
+            self._simulate_human_delay(HUMAN_DELAYS['report_delay'], HUMAN_DELAYS['report_delay'] + 2)
             
             # تحديث User-Agent
             self.session.headers['User-Agent'] = random.choice(self.user_agents)
@@ -434,10 +591,50 @@ class TikTokReporter:
             # معلومات الجهاز
             device_info = self._get_device_info()
             
-            # بناء بيانات البلاغ المحدثة
+            # محاولة الإبلاغ عبر API محدث
+            success = False
+            
+            # API 1: Mobile API (الأكثر موثوقية)
+            try:
+                success = await self._report_video_mobile(video_id, user_id, reason, device_info)
+                if success:
+                    print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Mobile API")
+                    account.mark_success()
+                    return True
+            except Exception as e:
+                print(f"❌ فشل في Mobile API: {e}")
+            
+            # API 2: Web API
+            if not success:
+                try:
+                    success = await self._report_video_web(video_id, user_id, reason)
+                    if success:
+                        print(f"✅ تم الإبلاغ عن الفيديو {video_id} بنجاح عبر Web API")
+                        account.mark_success()
+                        return True
+                except Exception as e:
+                    print(f"❌ فشل في Web API: {e}")
+            
+            if not success:
+                error_msg = "فشل في جميع محاولات الإبلاغ"
+                account.mark_failure(error_msg)
+                print(f"❌ {error_msg}")
+                return False
+            
+            return success
+            
+        except Exception as e:
+            error_msg = f"خطأ في إبلاغ الفيديو: {e}"
+            account.mark_failure(error_msg)
+            print(f"❌ {error_msg}")
+            return False
+    
+    async def _report_video_mobile(self, video_id: str, user_id: str, reason: int, device_info: Dict[str, str]) -> bool:
+        """الإبلاغ عن الفيديو عبر Mobile API"""
+        try:
+            # بناء بيانات البلاغ
             report_data = {
-                'report_type': 'video',
-                'object_id': video_id,
+                'aweme_id': video_id,
                 'owner_id': user_id,
                 'reason': str(reason),
                 'report_desc': '',
@@ -450,143 +647,104 @@ class TikTokReporter:
                 'resolution': device_info['resolution'],
                 'dpi': device_info['dpi'],
                 'channel': 'googleplay',
-                'aid': '1233',
-                'app_name': 'tiktok',
-                'version_code': '370805',
-                'version_name': '37.8.5',
+                'aid': TIKTOK_APP_CONFIG['mobile_android']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['mobile_android']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['mobile_android']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['mobile_android']['version_name'],
                 'ts': str(int(time.time())),
-                'iid': str(random.randint(1000, 9999)),
-                'device_id': str(random.randint(1000, 9999)),
+                'iid': str(random.randint(1000000000, 9999999999)),
+                'device_id': str(random.randint(1000000000, 9999999999)),
                 'openudid': str(uuid.uuid4()),
                 '_rticket': str(int(time.time() * 1000)),
                 'manifest_version_code': '2024120100',
                 'update_version_code': '2024120100',
                 'channel_sdk_version': '2024120100',
-                'device_platform': 'android',
-                'device_type': device_info['device_type'],
                 'language': 'en',
                 'cpu_abi': 'arm64-v8a',
-                'resolution': device_info['resolution'],
-                'openudid': str(uuid.uuid4()),
-                'update_version_code': '2024120100',
-                '_rticket': str(int(time.time() * 1000)),
-                'ts': str(int(time.time())),
                 'asr_id': str(random.randint(1000000000, 9999999999)),
                 'channel_id': 'googleplay',
-                'device_id': str(random.randint(1000000000, 9999999999)),
-                'iid': str(random.randint(1000000000, 9999999999)),
                 'idfa': str(uuid.uuid4()),
-                'install_id': str(uuid.uuid4()),
-                'manifest_version_code': '2024120100',
-                'openudid': str(uuid.uuid4()),
-                'os_api': device_info['os_api'],
-                'os_version': device_info['os_version'],
-                'os': 'android',
-                'device_platform': 'android',
-                'device_type': device_info['device_type'],
-                'device_brand': device_info['device_brand'],
-                'resolution': device_info['resolution'],
-                'dpi': device_info['dpi'],
-                'app_name': 'tiktok',
-                'version_code': '370805',
-                'version_name': '37.8.5',
-                'channel': 'googleplay',
-                'aid': '1233',
-                'app_name': 'tiktok',
-                'version_code': '370805',
-                'version_name': '37.8.5',
-                'ts': str(int(time.time())),
-                'iid': str(random.randint(1000, 9999)),
-                'device_id': str(random.randint(1000, 9999)),
-                'openudid': str(uuid.uuid4()),
-                '_rticket': str(int(time.time() * 1000))
+                'install_id': str(uuid.uuid4())
             }
             
-            # محاولة الإبلاغ عبر API محدث
-            success = False
+            # إرسال البلاغ
+            response = self.session.post(
+                TIKTOK_API_ENDPOINTS['report_video'],
+                data=report_data,
+                timeout=HTTP_TIMEOUT_SECONDS
+            )
             
-            # API 1: API الرسمي المحدث
-            try:
-                response = self.session.post(
-                    f"{TIKTOK_MOBILE_API}/aweme/v2/aweme/feedback/",
-                    data=report_data,
-                    timeout=HTTP_TIMEOUT_SECONDS
-                )
-                
-                if response.status_code == 200:
+            if response.status_code == 200:
+                try:
                     result = response.json()
-                    success = result.get('status_code') == 0
-                    
-                    if success:
-                        account.mark_success()
+                    # التحقق من نجاح البلاغ
+                    if result.get('status_code') == 0:
                         return True
-            except Exception as e:
-                print(f"فشل في API الأول: {e}")
+                    else:
+                        print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
+                        return False
+                except json.JSONDecodeError:
+                    print("❌ استجابة غير صحيحة من API")
+                    return False
             
-            # API 2: API البديل
-            if not success:
-                try:
-                    response = self.session.post(
-                        f"{TIKTOK_API_BASE}/aweme/v2/aweme/feedback/",
-                        data=report_data,
-                        timeout=HTTP_TIMEOUT_SECONDS
-                    )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        success = result.get('status_code') == 0
-                        
-                        if success:
-                            account.mark_success()
-                            return True
-                except Exception as e:
-                    print(f"فشل في API الثاني: {e}")
-            
-            # API 3: API الويب
-            if not success:
-                try:
-                    web_report_data = {
-                        'report_type': 'video',
-                        'object_id': video_id,
-                        'reason': str(reason),
-                        'report_desc': '',
-                        'device_platform': 'webapp',
-                        'aid': '1988',
-                        'app_name': 'tiktok_web',
-                        'version_code': '220100',
-                        'version_name': '22.1.0'
-                    }
-                    
-                    response = self.session.post(
-                        f"{TIKTOK_BASE_URL}/report/",
-                        data=web_report_data,
-                        timeout=HTTP_TIMEOUT_SECONDS
-                    )
-                    
-                    if response.status_code == 200:
-                        success = True
-                        account.mark_success()
-                        return True
-                except Exception as e:
-                    print(f"فشل في API الثالث: {e}")
-            
-            if not success:
-                account.mark_failure("فشل في جميع محاولات الإبلاغ")
-                return False
-            
-            return success
+            print(f"❌ فشل في البلاغ: {response.status_code}")
+            return False
             
         except Exception as e:
-            error_msg = f"خطأ في إبلاغ الفيديو: {e}"
-            account.mark_failure(error_msg)
-            print(error_msg)
+            print(f"❌ خطأ في Mobile API: {e}")
+            return False
+    
+    async def _report_video_web(self, video_id: str, user_id: str, reason: int) -> bool:
+        """الإبلاغ عن الفيديو عبر Web API"""
+        try:
+            # بناء بيانات البلاغ
+            report_data = {
+                'aweme_id': video_id,
+                'owner_id': user_id,
+                'reason': str(reason),
+                'report_desc': '',
+                'device_platform': 'webapp',
+                'aid': TIKTOK_APP_CONFIG['web']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['web']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['web']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['web']['version_name']
+            }
+            
+            # إرسال البلاغ
+            response = self.session.post(
+                TIKTOK_API_ENDPOINTS['report_web'],
+                data=report_data,
+                timeout=HTTP_TIMEOUT_SECONDS
+            )
+            
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                    # التحقق من نجاح البلاغ
+                    if result.get('status_code') == 0 or result.get('success'):
+                        return True
+                    else:
+                        print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
+                        return False
+                except json.JSONDecodeError:
+                    # إذا لم تكن الاستجابة JSON، نتحقق من النص
+                    if 'success' in response.text.lower() or 'reported' in response.text.lower():
+                        return True
+                    print("❌ استجابة غير صحيحة من Web API")
+                    return False
+            
+            print(f"❌ فشل في البلاغ: {response.status_code}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ خطأ في Web API: {e}")
             return False
     
     async def report_account(self, account: TikTokAccount, target_username: str, reason: int) -> bool:
-        """إبلاغ عن حساب باستخدام API محدث"""
+        """إبلاغ عن حساب باستخدام TikTok API الحقيقي"""
         try:
             # محاكاة تأخير بشري
-            self._simulate_human_delay()
+            self._simulate_human_delay(HUMAN_DELAYS['report_delay'], HUMAN_DELAYS['report_delay'] + 2)
             
             # تحديث User-Agent
             self.session.headers['User-Agent'] = random.choice(self.user_agents)
@@ -600,11 +758,50 @@ class TikTokReporter:
             # معلومات الجهاز
             device_info = self._get_device_info()
             
-            # بناء بيانات البلاغ المحدثة
+            # محاولة الإبلاغ عبر API محدث
+            success = False
+            
+            # API 1: Mobile API
+            try:
+                success = await self._report_account_mobile(target_user_id, reason, device_info)
+                if success:
+                    print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Mobile API")
+                    account.mark_success()
+                    return True
+            except Exception as e:
+                print(f"❌ فشل في Mobile API: {e}")
+            
+            # API 2: Web API
+            if not success:
+                try:
+                    success = await self._report_account_web(target_user_id, reason)
+                    if success:
+                        print(f"✅ تم الإبلاغ عن الحساب {target_username} بنجاح عبر Web API")
+                        account.mark_success()
+                        return True
+                except Exception as e:
+                    print(f"❌ فشل في Web API: {e}")
+            
+            if not success:
+                error_msg = "فشل في جميع محاولات الإبلاغ"
+                account.mark_failure(error_msg)
+                print(f"❌ {error_msg}")
+                return False
+            
+            return success
+            
+        except Exception as e:
+            error_msg = f"خطأ في إبلاغ الحساب: {e}"
+            account.mark_failure(error_msg)
+            print(f"❌ {error_msg}")
+            return False
+    
+    async def _report_account_mobile(self, user_id: str, reason: int, device_info: Dict[str, str]) -> bool:
+        """الإبلاغ عن الحساب عبر Mobile API"""
+        try:
+            # بناء بيانات البلاغ
             report_data = {
-                'report_type': 'user',
-                'object_id': target_user_id,
-                'owner_id': target_user_id,
+                'user_id': user_id,
                 'reason': str(reason),
                 'report_desc': '',
                 'device_platform': 'android',
@@ -616,136 +813,96 @@ class TikTokReporter:
                 'resolution': device_info['resolution'],
                 'dpi': device_info['dpi'],
                 'channel': 'googleplay',
-                'aid': '1233',
-                'app_name': 'tiktok',
-                'version_code': '370805',
-                'version_name': '37.8.5',
+                'aid': TIKTOK_APP_CONFIG['mobile_android']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['mobile_android']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['mobile_android']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['mobile_android']['version_name'],
                 'ts': str(int(time.time())),
-                'iid': str(random.randint(1000, 9999)),
-                'device_id': str(random.randint(1000, 9999)),
+                'iid': str(random.randint(1000000000, 9999999999)),
+                'device_id': str(random.randint(1000000000, 9999999999)),
                 'openudid': str(uuid.uuid4()),
                 '_rticket': str(int(time.time() * 1000)),
                 'manifest_version_code': '2024120100',
                 'update_version_code': '2024120100',
                 'channel_sdk_version': '2024120100',
-                'device_platform': 'android',
-                'device_type': device_info['device_type'],
                 'language': 'en',
                 'cpu_abi': 'arm64-v8a',
-                'resolution': device_info['resolution'],
-                'openudid': str(uuid.uuid4()),
-                'update_version_code': '2024120100',
-                '_rticket': str(int(time.time() * 1000)),
-                'ts': str(int(time.time())),
                 'asr_id': str(random.randint(1000000000, 9999999999)),
                 'channel_id': 'googleplay',
-                'device_id': str(random.randint(1000000000, 9999999999)),
-                'iid': str(random.randint(1000000000, 9999999999)),
                 'idfa': str(uuid.uuid4()),
-                'install_id': str(uuid.uuid4()),
-                'manifest_version_code': '2024120100',
-                'openudid': str(uuid.uuid4()),
-                'os_api': device_info['os_api'],
-                'os_version': device_info['os_version'],
-                'os': 'android',
-                'device_platform': 'android',
-                'device_type': device_info['device_type'],
-                'device_brand': device_info['device_brand'],
-                'resolution': device_info['resolution'],
-                'dpi': device_info['dpi'],
-                'app_name': 'tiktok',
-                'version_code': '370805',
-                'version_name': '37.8.5',
-                'channel': 'googleplay',
-                'aid': '1233',
-                'app_name': 'tiktok',
-                'version_code': '370805',
-                'version_name': '37.8.5',
-                'ts': str(int(time.time())),
-                'iid': str(random.randint(1000, 9999)),
-                'device_id': str(random.randint(1000, 9999)),
-                'openudid': str(uuid.uuid4()),
-                '_rticket': str(int(time.time() * 1000))
+                'install_id': str(uuid.uuid4())
             }
             
-            # محاولة الإبلاغ عبر API محدث
-            success = False
+            # إرسال البلاغ
+            response = self.session.post(
+                TIKTOK_API_ENDPOINTS['report_user'],
+                data=report_data,
+                timeout=HTTP_TIMEOUT_SECONDS
+            )
             
-            # API 1: API الرسمي المحدث
-            try:
-                response = self.session.post(
-                    f"{TIKTOK_MOBILE_API}/aweme/v2/aweme/feedback/",
-                    data=report_data,
-                    timeout=HTTP_TIMEOUT_SECONDS
-                )
-                
-                if response.status_code == 200:
+            if response.status_code == 200:
+                try:
                     result = response.json()
-                    success = result.get('status_code') == 0
-                    
-                    if success:
-                        account.mark_success()
+                    # التحقق من نجاح البلاغ
+                    if result.get('status_code') == 0:
                         return True
-            except Exception as e:
-                print(f"فشل في API الأول: {e}")
+                    else:
+                        print(f"❌ فشل في البلاغ: {result.get('status_msg', 'Unknown error')}")
+                        return False
+                except json.JSONDecodeError:
+                    print("❌ استجابة غير صحيحة من API")
+                    return False
             
-            # API 2: API البديل
-            if not success:
-                try:
-                    response = self.session.post(
-                        f"{TIKTOK_API_BASE}/aweme/v2/aweme/feedback/",
-                        data=report_data,
-                        timeout=HTTP_TIMEOUT_SECONDS
-                    )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        success = result.get('status_code') == 0
-                        
-                        if success:
-                            account.mark_success()
-                            return True
-                except Exception as e:
-                    print(f"فشل في API الثاني: {e}")
-            
-            # API 3: API الويب
-            if not success:
-                try:
-                    web_report_data = {
-                        'report_type': 'user',
-                        'object_id': target_user_id,
-                        'reason': str(reason),
-                        'report_desc': '',
-                        'device_platform': 'webapp',
-                        'aid': '1988',
-                        'app_name': 'tiktok_web',
-                        'version_code': '220100',
-                        'version_name': '22.1.0'
-                    }
-                    
-                    response = self.session.post(
-                        f"{TIKTOK_BASE_URL}/report/user/",
-                        data=web_report_data,
-                        timeout=HTTP_TIMEOUT_SECONDS
-                    )
-                    
-                    if response.status_code == 200:
-                        success = True
-                        account.mark_success()
-                        return True
-                except Exception as e:
-                    print(f"فشل في API الثالث: {e}")
-            
-            if not success:
-                account.mark_failure("فشل في جميع محاولات الإبلاغ")
-                return False
-            
-            return success
+            print(f"❌ فشل في البلاغ: {response.status_code}")
+            return False
             
         except Exception as e:
-            error_msg = f"خطأ في إبلاغ الحساب: {e}"
-            account.mark_failure(error_msg)
-            print(error_msg)
+            print(f"❌ خطأ في Mobile API: {e}")
+            return False
+    
+    async def _report_account_web(self, user_id: str, reason: int) -> bool:
+        """الإبلاغ عن الحساب عبر Web API"""
+        try:
+            # بناء بيانات البلاغ
+            report_data = {
+                'user_id': user_id,
+                'reason': str(reason),
+                'report_desc': '',
+                'device_platform': 'webapp',
+                'aid': TIKTOK_APP_CONFIG['web']['aid'],
+                'app_name': TIKTOK_APP_CONFIG['web']['app_name'],
+                'version_code': TIKTOK_APP_CONFIG['web']['version_code'],
+                'version_name': TIKTOK_APP_CONFIG['web']['version_name']
+            }
+            
+            # إرسال البلاغ
+            response = self.session.post(
+                f"{TIKTOK_API_ENDPOINTS['report_web']}/user/",
+                data=report_data,
+                timeout=HTTP_TIMEOUT_SECONDS
+            )
+            
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                    # التحقق من نجاح البلاغ
+                    if result.get('status_code') == 0 or result.get('success'):
+                        return True
+                    else:
+                        print(f"❌ فشل في البلاغ: {result.get('message', 'Unknown error')}")
+                        return False
+                except json.JSONDecodeError:
+                    # إذا لم تكن الاستجابة JSON، نتحقق من النص
+                    if 'success' in response.text.lower() or 'reported' in response.text.lower():
+                        return True
+                    print("❌ استجابة غير صحيحة من Web API")
+                    return False
+            
+            print(f"❌ فشل في البلاغ: {response.status_code}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ خطأ في Web API: {e}")
             return False
     
     def validate_target(self, target: str) -> Tuple[str, Optional[str], Optional[str]]:

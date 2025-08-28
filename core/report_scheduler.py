@@ -121,10 +121,13 @@ class ReportScheduler:
                 
                 success = False
                 if job.report_type == ReportType.VIDEO:
-                    video_id, owner_user_id = self.reporter.extract_video_info(job.target)
-                    if not video_id or not owner_user_id:
+                    # استخراج معلومات الفيديو
+                    video_info = await self.reporter.extract_video_info(job.target)
+                    if not video_info or not video_info[0] or not video_info[1]:
                         job.update_progress(account.id, "failed", "فشل في استخراج معلومات الفيديو")
                         continue
+                    
+                    video_id, owner_user_id = video_info
                     success = await self.reporter.report_video(account, video_id, owner_user_id, job.reason)
                 elif job.report_type == ReportType.ACCOUNT:
                     success = await self.reporter.report_account(
